@@ -27,5 +27,7 @@ jobs:
                     npm install
                   fi
 
-            - name: Typecheck
-              run: npm run check
+            - name: Syntax check & test
+              run: |
+                  npm run check
+                  npm test
