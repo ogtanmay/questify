@@ -1,14 +1,14 @@
-import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import test from "node:test";
-import {
+const assert = require("node:assert/strict");
+const { mkdtempSync, rmSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
+const test = require("node:test");
+const {
     getQuestRecipients,
     loadQuestAudience,
     recordQuestUser,
     setQuestNotification,
-} from "./questAudience";
+} = require("./questAudience");
 
 test("tracks bot users once per server and reloads the recipient list", () => {
     const directory = mkdtempSync(join(tmpdir(), "quest-audience-"));

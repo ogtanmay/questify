@@ -1,50 +1,19 @@
-import { fetch } from 'undici';
+const { fetch } = require('undici');
 
-type BaseResponse = {
-    errorId: 0 | 1;
-    errorCode?: string;
-    errorDescription?: string;
-    taskId?: string;
-};
+class CapSolverClient {
+    static BASE_URL = 'https://api.capsolver.com';
 
-type TaskResult<T extends object = object> = BaseResponse & {
-    status: 'idle' | 'processing' | 'ready' | 'failed';
-    solution?: T;
-};
-
-type HCaptchaTask = {
-    type: 'HCaptchaTaskProxyless' | 'HCaptchaTurboTask';
-    websiteURL: string;
-    websiteKey: string;
-    userAgent?: string;
-    isInvisible?: boolean;
-    enterprisePayload?: {
-        rqdata?: string;
-    };
-};
-
-type HCaptchaSolution = {
-    gRecaptchaResponse: string;
-    userAgent?: string;
-    respKey?: string;
-};
-
-export class CapSolverClient {
-    public static readonly BASE_URL = 'https://api.capsolver.com';
-    private readonly apiKey: string;
-    private readonly headers: Headers;
-
-    constructor(apiKey: string) {
+    constructor(apiKey) {
         this.apiKey = apiKey;
         this.headers = new Headers({ 'Content-Type': 'application/json' });
     }
 
-    private async createTask(task: HCaptchaTask): Promise<string> {
+    async createTask(task) {
         const res = await fetch(`${CapSolverClient.BASE_URL}/createTask`, {
             method: 'POST',
             headers: this.headers,
             body: JSON.stringify({ clientKey: this.apiKey, task }),
-        }).then((r) => r.json() as any as BaseResponse);
+        }).then((r) => r.json());
 
         if (res.errorId === 1) {
             throw new Error(`CapSolver createTask error: ${res.errorCode} — ${res.errorDescription}`);
@@ -55,7 +24,7 @@ export class CapSolverClient {
         return res.taskId;
     }
 
-    private async pollResult<T extends object>(taskId: string, timeoutMs = 120_000): Promise<T> {
+    async pollResult(taskId, timeoutMs = 120_000) {
         const deadline = Date.now() + timeoutMs;
 
         while (Date.now() < deadline) {
@@ -65,7 +34,7 @@ export class CapSolverClient {
                 method: 'POST',
                 headers: this.headers,
                 body: JSON.stringify({ clientKey: this.apiKey, taskId }),
-            }).then((r) => r.json() as any as TaskResult<T>);
+            }).then((r) => r.json());
 
             if (res.errorId === 1) {
                 throw new Error(`CapSolver getTaskResult error: ${res.errorCode} — ${res.errorDescription}`);
@@ -81,21 +50,21 @@ export class CapSolverClient {
         throw new Error('CapSolver: timed out waiting for solution');
     }
 
-    async hcaptcha(
-        sitekey: string,
-        url: string,
-        options?: { rqdata?: string; userAgent?: string; isInvisible?: boolean },
-    ): Promise<HCaptchaSolution> {
-        const task: HCaptchaTask = {
+    async hcaptcha(sitekey, url, options = {}) {
+        const task = {
             type: 'HCaptchaTaskProxyless',
             websiteURL: url,
             websiteKey: sitekey,
-            userAgent: options?.userAgent,
-            isInvisible: options?.isInvisible ?? false,
-            enterprisePayload: options?.rqdata ? { rqdata: options.rqdata } : undefined,
+            userAgent: options.userAgent,
+            isInvisible: options.isInvisible ?? false,
+            enterprisePayload: options.rqdata ? { rqdata: options.rqdata } : undefined,
         };
 
         const taskId = await this.createTask(task);
-        return this.pollResult<HCaptchaSolution>(taskId);
+        return this.pollResult(taskId);
     }
 }
+
+module.exports = {
+    CapSolverClient,
+};

@@ -1,9 +1,9 @@
-import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import test from "node:test";
-import {
+const assert = require("node:assert/strict");
+const { mkdtempSync, rmSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
+const test = require("node:test");
+const {
     getUserRecord,
     getUserToken,
     hasUserToken,
@@ -11,7 +11,7 @@ import {
     loadUserTokens,
     removeUserToken,
     saveUserToken,
-} from "./userStorage";
+} = require("./userStorage");
 
 test("saves, loads, and retrieves linked user tokens", () => {
     const dir = mkdtempSync(join(tmpdir(), "user-tokens-"));

@@ -1,87 +1,65 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+const { mkdirSync, readFileSync, renameSync, writeFileSync } = require("node:fs");
+const { dirname, join } = require("node:path");
 
 const DATA_FILE = join(process.cwd(), ".data", "user-tokens.json");
 const SNOWFLAKE = /^\d{17,20}$/;
 
-export interface UserTokenRecord {
-    userId: string;
-    token: string;
-    username?: string;
-    globalName?: string;
-    discriminator?: string;
-    avatar?: string;
-    notes?: string;
-    linkedAt: string;
-    updatedAt: string;
-}
-
-export type UserTokenDatabase = Record<string, UserTokenRecord>;
-
-export function loadUserTokens(file = DATA_FILE): UserTokenDatabase {
+function loadUserTokens(file = DATA_FILE) {
     try {
         const raw = readFileSync(file, "utf8");
-        const data: unknown = JSON.parse(raw);
+        const data = JSON.parse(raw);
         if (!data || typeof data !== "object" || Array.isArray(data)) {
             return {};
         }
-        const validated: UserTokenDatabase = {};
+        const validated = {};
         for (const [userId, record] of Object.entries(data)) {
             if (!SNOWFLAKE.test(userId)) continue;
             if (!record || typeof record !== "object") continue;
-            const rec = record as Partial<UserTokenRecord>;
-            if (typeof rec.token !== "string" || !rec.token.trim()) continue;
+            if (typeof record.token !== "string" || !record.token.trim()) continue;
             validated[userId] = {
                 userId,
-                token: rec.token.trim(),
-                username: typeof rec.username === "string" ? rec.username : undefined,
-                globalName: typeof rec.globalName === "string" ? rec.globalName : undefined,
-                discriminator: typeof rec.discriminator === "string" ? rec.discriminator : undefined,
-                avatar: typeof rec.avatar === "string" ? rec.avatar : undefined,
-                notes: typeof rec.notes === "string" ? rec.notes : undefined,
-                linkedAt: rec.linkedAt || new Date().toISOString(),
-                updatedAt: rec.updatedAt || new Date().toISOString(),
+                token: record.token.trim(),
+                username: typeof record.username === "string" ? record.username : undefined,
+                globalName: typeof record.globalName === "string" ? record.globalName : undefined,
+                discriminator: typeof record.discriminator === "string" ? record.discriminator : undefined,
+                avatar: typeof record.avatar === "string" ? record.avatar : undefined,
+                notes: typeof record.notes === "string" ? record.notes : undefined,
+                linkedAt: record.linkedAt || new Date().toISOString(),
+                updatedAt: record.updatedAt || new Date().toISOString(),
             };
         }
         return validated;
-    } catch (error: any) {
+    } catch (error) {
         if (error.code === "ENOENT") return {};
         console.warn("[UserStorage] Failed to read user tokens file, starting empty:", error.message);
         return {};
     }
 }
 
-export function getUserRecord(userId: string, file = DATA_FILE): UserTokenRecord | null {
+function getUserRecord(userId, file = DATA_FILE) {
     if (!SNOWFLAKE.test(userId)) return null;
     const db = loadUserTokens(file);
     return db[userId] ?? null;
 }
 
-export function getUserToken(userId: string, file = DATA_FILE): string | null {
+function getUserToken(userId, file = DATA_FILE) {
     const record = getUserRecord(userId, file);
     return record?.token ?? null;
 }
 
-export function hasUserToken(userId: string, file = DATA_FILE): boolean {
+function hasUserToken(userId, file = DATA_FILE) {
     return Boolean(getUserToken(userId, file));
 }
 
-export function saveUserToken(
-    userId: string,
-    data: {
-        token: string;
-        username?: string;
-        globalName?: string;
-        discriminator?: string;
-        avatar?: string;
-        notes?: string;
-    },
+function saveUserToken(
+    userId,
+    data,
     file = DATA_FILE,
-): UserTokenRecord {
+) {
     if (!SNOWFLAKE.test(userId)) {
         throw new Error("Invalid Discord user snowflake ID");
     }
-    const cleanToken = data.token.trim();
+    const cleanToken = data.token ? data.token.trim() : "";
     if (!cleanToken || cleanToken.length < 15) {
         throw new Error("Invalid user token format");
     }
@@ -90,7 +68,7 @@ export function saveUserToken(
     const existing = db[userId];
     const now = new Date().toISOString();
 
-    const record: UserTokenRecord = {
+    const record = {
         userId,
         token: cleanToken,
         username: data.username || existing?.username,
@@ -107,7 +85,7 @@ export function saveUserToken(
     return record;
 }
 
-export function removeUserToken(userId: string, file = DATA_FILE): boolean {
+function removeUserToken(userId, file = DATA_FILE) {
     if (!SNOWFLAKE.test(userId)) return false;
     const db = loadUserTokens(file);
     if (!Object.prototype.hasOwnProperty.call(db, userId)) return false;
@@ -118,12 +96,12 @@ export function removeUserToken(userId: string, file = DATA_FILE): boolean {
     return true;
 }
 
-export function listUserTokens(file = DATA_FILE): UserTokenRecord[] {
+function listUserTokens(file = DATA_FILE) {
     const db = loadUserTokens(file);
     return Object.values(db);
 }
 
-function persistUserTokens(db: UserTokenDatabase, file: string): void {
+function persistUserTokens(db, file) {
     mkdirSync(dirname(file), { recursive: true });
     const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
     writeFileSync(temp, JSON.stringify(db, null, 2) + "\n", {
@@ -132,19 +110,7 @@ function persistUserTokens(db: UserTokenDatabase, file: string): void {
     renameSync(temp, file);
 }
 
-/**
- * Optionally inspects Discord API /users/@me with the provided token
- * to retrieve the account's username, discriminator, global name and avatar.
- */
-export async function verifyAndFetchDiscordUser(token: string): Promise<{
-    valid: boolean;
-    id?: string;
-    username?: string;
-    globalName?: string;
-    discriminator?: string;
-    avatar?: string;
-    error?: string;
-}> {
+async function verifyAndFetchDiscordUser(token) {
     try {
         const res = await fetch("https://discord.com/api/v9/users/@me", {
             headers: {
@@ -159,7 +125,7 @@ export async function verifyAndFetchDiscordUser(token: string): Promise<{
                 error: res.status === 401 ? "Unauthorized / Invalid Discord token" : `Discord API HTTP ${res.status}: ${errText}`,
             };
         }
-        const data = (await res.json()) as any;
+        const data = await res.json();
         return {
             valid: true,
             id: data.id,
@@ -168,10 +134,21 @@ export async function verifyAndFetchDiscordUser(token: string): Promise<{
             discriminator: data.discriminator,
             avatar: data.avatar,
         };
-    } catch (e: any) {
+    } catch (e) {
         return {
             valid: false,
             error: e.message || "Failed to reach Discord API",
         };
     }
 }
+
+module.exports = {
+    loadUserTokens,
+    getUserRecord,
+    getUserToken,
+    hasUserToken,
+    saveUserToken,
+    removeUserToken,
+    listUserTokens,
+    verifyAndFetchDiscordUser,
+};

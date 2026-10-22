@@ -1,48 +1,40 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+const { mkdirSync, readFileSync, renameSync, writeFileSync } = require("node:fs");
+const { dirname, join } = require("node:path");
 
 const DATA_FILE = join(process.cwd(), ".data", "quest-audience.json");
 const SNOWFLAKE = /^\d{17,20}$/;
 
-export interface QuestAudienceEntry {
-    recipients: string[];
-    optedOut: string[];
-}
-
-export type QuestAudience = Record<string, QuestAudienceEntry>;
-
-export function loadQuestAudience(file = DATA_FILE): QuestAudience {
+function loadQuestAudience(file = DATA_FILE) {
     try {
-        const data: unknown = JSON.parse(readFileSync(file, "utf8"));
+        const data = JSON.parse(readFileSync(file, "utf8"));
         if (!data || typeof data !== "object" || Array.isArray(data)) {
             throw new Error("Invalid quest notification audience");
         }
         for (const [guildId, entry] of Object.entries(data)) {
-            const value = entry as Partial<QuestAudienceEntry>;
             if (
                 !SNOWFLAKE.test(guildId) ||
-                !Array.isArray(value.recipients) ||
-                !Array.isArray(value.optedOut) ||
-                [...value.recipients, ...value.optedOut].some(
+                !Array.isArray(entry.recipients) ||
+                !Array.isArray(entry.optedOut) ||
+                [...entry.recipients, ...entry.optedOut].some(
                     (id) => typeof id !== "string" || !SNOWFLAKE.test(id),
                 )
             ) {
                 throw new Error("Invalid quest notification audience");
             }
         }
-        return data as QuestAudience;
-    } catch (error: any) {
+        return data;
+    } catch (error) {
         if (error.code === "ENOENT") return {};
         throw error;
     }
 }
 
-export function recordQuestUser(
-    audience: QuestAudience,
-    guildId: string,
-    userId: string,
+function recordQuestUser(
+    audience,
+    guildId,
+    userId,
     file = DATA_FILE,
-): void {
+) {
     if (!SNOWFLAKE.test(guildId) || !SNOWFLAKE.test(userId)) {
         throw new Error("Invalid guild or user ID");
     }
@@ -58,13 +50,13 @@ export function recordQuestUser(
     audience[guildId] = next[guildId];
 }
 
-export function setQuestNotification(
-    audience: QuestAudience,
-    guildId: string,
-    userId: string,
-    enabled: boolean,
+function setQuestNotification(
+    audience,
+    guildId,
+    userId,
+    enabled,
     file = DATA_FILE,
-): void {
+) {
     if (!SNOWFLAKE.test(guildId) || !SNOWFLAKE.test(userId)) {
         throw new Error("Invalid guild or user ID");
     }
@@ -79,14 +71,11 @@ export function setQuestNotification(
     audience[guildId] = next[guildId];
 }
 
-export function getQuestRecipients(
-    audience: QuestAudience,
-    guildId: string,
-): string[] {
+function getQuestRecipients(audience, guildId) {
     return [...(audience[guildId]?.recipients ?? [])];
 }
 
-function persistAudience(audience: QuestAudience, file: string): void {
+function persistAudience(audience, file) {
     mkdirSync(dirname(file), { recursive: true });
     const temp = `${file}.${process.pid}.tmp`;
     writeFileSync(temp, JSON.stringify(audience, null, 2) + "\n", {
@@ -94,3 +83,10 @@ function persistAudience(audience: QuestAudience, file: string): void {
     });
     renameSync(temp, file);
 }
+
+module.exports = {
+    loadQuestAudience,
+    recordQuestUser,
+    setQuestNotification,
+    getQuestRecipients,
+};
