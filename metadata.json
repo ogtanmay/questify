@@ -1,0 +1,8 @@
+{
+  "name": "Discord Quest API & Dashboard",
+  "description": "Discord Quest automation API and web control center with status checking, quest execution, and Vercel-ready REST API endpoints.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

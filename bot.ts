@@ -1,3 +1,4 @@
+import http from "node:http";
 import {
     GatewayDispatchEvents,
     GatewayIntentBits,
@@ -27,17 +28,45 @@ import {
     recordQuestUser,
     setQuestNotification,
 } from "./src/questAudience";
+import { spoofBadges, POPULAR_GAMES } from "./src/badgeSpoofer";
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-
-if (!BOT_TOKEN) {
-    console.error("BOT_TOKEN is required.");
-    process.exit(1);
+function isRealConfigToken(val: string | undefined): boolean {
+    if (!val) return false;
+    const lower = val.trim().toLowerCase();
+    if (
+        lower === "your_discord_bot_token_here" ||
+        lower === "your_discord_client_id_here" ||
+        lower === "your_token_here" ||
+        lower === "placeholder" ||
+        lower === ""
+    ) {
+        return false;
+    }
+    return val.trim().length > 10;
 }
-if (!CLIENT_ID) {
-    console.error("CLIENT_ID is required.");
-    process.exit(1);
+
+export const BOT_TOKEN = process.env.BOT_TOKEN || "";
+export const CLIENT_ID = process.env.CLIENT_ID || "";
+export const hasValidBotConfig = isRealConfigToken(BOT_TOKEN) && isRealConfigToken(CLIENT_ID);
+
+export let isBotConnected = false;
+
+export function isDiscordBotRunning(): boolean {
+    return isBotConnected;
+}
+
+export const OWNER_IDS = (
+    process.env.OWNER_ID ||
+    process.env.OWNER_IDS ||
+    ""
+)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+export function isOwner(userId: string): boolean {
+    if (!userId) return false;
+    return OWNER_IDS.includes(userId);
 }
 
 const PREFIX = "!quest";
@@ -52,13 +81,23 @@ const INTENTS =
     GatewayIntentBits.MessageContent |
     GatewayIntentBits.DirectMessages;
 
-const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
-const gateway = new WebSocketManager({
-    token: BOT_TOKEN,
-    intents: INTENTS,
-    rest,
-});
-const client = new Client({ rest, gateway });
+let rest: REST = null as any;
+let gateway: WebSocketManager = null as any;
+let client: Client = null as any;
+
+if (hasValidBotConfig) {
+    try {
+        rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
+        gateway = new WebSocketManager({
+            token: BOT_TOKEN,
+            intents: INTENTS,
+            rest,
+        });
+        client = new Client({ rest, gateway });
+    } catch (e: any) {
+        console.error("[Discord Bot] Initialization error:", e.message);
+    }
+}
 
 // ── Custom IDs ────────────────────────────────────────────────────────────────
 const BTN_RUN = "quest_run_btn";
@@ -154,47 +193,117 @@ function buildHelpEmbed() {
         embeds: [
             {
                 color: BRAND_COLOR,
-                author: { name: "QUEST CONTROL  /  GUIDE" },
-                title: "✦ Command guide",
+                author: { name: "QUEST CONTROL  /  COMMAND GUIDE" },
+                title: "✦ Quest & Badge Bot Command Center",
                 description:
-                    "Your quick reference for everything Quest Control.\n━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    "Complete reference of all slash and prefix commands available in this bot.\n━━━━━━━━━━━━━━━━━━━━━━━━━━",
                 fields: [
                     {
-                        name: "⚡  Slash commands",
+                        name: "⚡  Slash Commands",
                         value:
-                            "`/quest-config` — view this server's channel setting\n" +
-                            "`/set channel [#channel]` — admin: choose the quest channel\n" +
-                            "`/reset channel` — admin: disable quest commands until a channel is set\n" +
-                            "`/quest-notify on|off|status|test` — manage and test new quest DMs\n" +
-                            "`/quest-announce <quest> [details]` — admin: DM quest users\n" +
-                            "`/quest-help` — open this guide\n" +
-                            "`/quest-ping` — check connectivity\n" +
-                            "`/quest-status` — view quest progress\n" +
-                            "`/run-quests` — start a quest run",
+                            "`/run-quests` — auto-complete active Discord quests\n" +
+                            "`/quest-status` — check your active quests & progress\n" +
+                            "`/spoof-playtime` — simulate game hours for profile Game Time badge\n" +
+                            "`/spoof-variety` — simulate distinct games for Game Variety badge\n" +
+                            "`/quest-help` — open this command guide\n" +
+                            "`/quest-ping` — check gateway & connectivity status",
                         inline: false,
                     },
                     {
-                        name: "⌨️  Prefix commands",
+                        name: "⌨️  Prefix Commands (Quests & Status)",
                         value:
-                            "`!quest` — open the control center\n" +
-                            "`!quest help` — open this guide\n" +
-                            "`!quest status <token>` — legacy status command (not recommended)",
+                            "`!help` or `!quest help` — open this command guide\n" +
+                            "`!ping` or `!quest ping` — bot latency, memory & gateway status\n" +
+                            "`!quest` or `!quest panel` — show interactive button dashboard\n" +
+                            "`!quest run <token>` — auto-complete quests *(message auto-deleted)*\n" +
+                            "`!quest status <token>` — view quest progress *(message auto-deleted)*",
                         inline: false,
                     },
                     {
-                        name: "📊  What the bot reports",
+                        name: "🎮  Prefix Commands (Discord Profile Badges)",
                         value:
-                            "Progress, completion state, rewards, expiry time, rate limits, and authentication errors are shown as clearly as Discord allows.",
+                            "`!badge playtime <token> [hours] [game]` — spoof hours on Game Time badge\n" +
+                            "`!badge variety <token> [games_count]` — spoof 10-50 games on Variety badge\n" +
+                            "`!badge games` — list supported top games and application IDs\n" +
+                            "`!badge help` — explain how science telemetry & badge sync work",
                         inline: false,
                     },
                     {
-                        name: "🔒  Safety first",
+                        name: "👑  Owner Commands (OWNER_ID in .env)",
                         value:
-                            "Never share your user token in a public message. User-token automation may violate Discord's rules and put your account at risk.",
+                            "`!sync [guildId]` — force instant slash command registration\n" +
+                            "`!stats` — bot uptime, RAM usage, gateway state & runners\n" +
+                            "`!announce <quest_name> [details]` — DM registered quest recipients\n" +
+                            "`!setchannel <#channel>` — lock quest commands to designated channel\n" +
+                            "`!resetchannel` — remove channel lock restriction\n" +
+                            "`!owner help` — owner administrative commands\n" +
+                            "`!owner eval <code>` — execute JavaScript expression safely",
+                        inline: false,
+                    },
+                    {
+                        name: "🔒  Safety & Token Privacy",
+                        value:
+                            "Prefix commands containing user tokens are immediately deleted to protect your account. Discord badges update on user profiles in batches within 24-48 hours.",
                         inline: false,
                     },
                 ],
-                footer: { text: "QUEST CONTROL  •  Help center" },
+                footer: { text: "QUEST CONTROL  •  Prefix & Slash Commands" },
+                timestamp: new Date().toISOString(),
+            },
+        ],
+    };
+}
+
+function buildBadgeHelpEmbed() {
+    return {
+        embeds: [
+            {
+                color: EMBED_COLOR,
+                author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
+                title: "✦ Discord Badge Spoofer Guide",
+                description:
+                    "This engine uses Discord's official `/api/v9/science` analytics pipeline to legitimately register game activity telemetry for Discord profile badges.\n━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                fields: [
+                    {
+                        name: "🎮  Game Time Badge",
+                        value: "Simulates continuous gameplay duration for detectable titles. Use `!badge playtime <token> 100` or specify a game like `!badge playtime <token> 150 valorant`.",
+                        inline: false,
+                    },
+                    {
+                        name: "🎯  Game Variety Badge",
+                        value: "Simulates unique detectable game launches across Discord's catalog. Use `!badge variety <token> 30` to simulate 30 unique games.",
+                        inline: false,
+                    },
+                    {
+                        name: "📋  Supported Games",
+                        value: "Use `!badge games` to view all 40+ pre-configured top detectable game titles and application IDs.",
+                        inline: false,
+                    },
+                    {
+                        name: "⏳  When do badges show up?",
+                        value: "Discord evaluates profile badge telemetry in asynchronous backend batches. Badges appear on your Discord profile within **24 to 48 hours**.",
+                        inline: false,
+                    },
+                ],
+                footer: { text: "QUEST CONTROL  •  Discord Science Telemetry" },
+                timestamp: new Date().toISOString(),
+            },
+        ],
+    };
+}
+
+function buildBadgeGamesEmbed() {
+    const list = POPULAR_GAMES.slice(0, 25)
+        .map((g, i) => `**${i + 1}.** ${g.name} — \`${g.id}\``)
+        .join("\n");
+    return {
+        embeds: [
+            {
+                color: EMBED_COLOR,
+                author: { name: "QUEST CONTROL  /  DETECTABLE GAMES" },
+                title: "✦ Supported Detectable Games",
+                description: `Discord tracks game badges for verified games in their catalog. Here are the top popular games available for spoofing:\n\n${list}\n\n*...and more in Discord's catalog.*`,
+                footer: { text: "QUEST CONTROL  •  Use !badge playtime <token> <hours> <game_id>" },
                 timestamp: new Date().toISOString(),
             },
         ],
@@ -524,140 +633,218 @@ async function sendStatusEmbeds(
 }
 
 // ── Register slash commands ───────────────────────────────────────────────────
-async function registerCommands() {
-    await rest.put(`/applications/${CLIENT_ID}/commands` as any, {
-        body: [
-            {
-                name: "run-quests",
-                description:
-                    "Auto-complete your Discord quests using your user token",
-                options: [
-                    {
-                        name: "token",
-                        description:
-                            "Your Discord user token (reply is private)",
-                        type: ApplicationCommandOptionType.String,
-                        required: true,
-                    },
-                ],
-            },
-            {
-                name: "quest-status",
-                description:
-                    "Check your active quests and progress without completing them",
-                options: [
-                    {
-                        name: "token",
-                        description:
-                            "Your Discord user token (reply is private)",
-                        type: ApplicationCommandOptionType.String,
-                        required: true,
-                    },
-                ],
-            },
-            {
-                name: "quest-help",
-                description: "Open the Quest Bot command and safety guide",
-            },
-            {
-                name: "quest-ping",
-                description: "Check whether the Quest Bot is online",
-            },
-            {
-                name: "set",
-                description: "Configure Quest Control for this server",
-                dm_permission: false,
-                default_member_permissions: PermissionFlagsBits.ManageGuild.toString(),
-                options: [
-                    {
-                        name: "channel",
-                        description: "Choose the only channel where quest commands work",
-                        type: ApplicationCommandOptionType.Subcommand,
-                        options: [
-                            {
-                                name: "target",
-                                description: "Channel to use (defaults to this channel)",
-                                type: ApplicationCommandOptionType.Channel,
-                                channel_types: [ChannelType.GuildText],
-                                required: false,
-                            },
-                        ],
-                    },
-                ],
-            },
-            {
-                name: "quest-config",
-                description: "View the configured quest channel for this server",
-                dm_permission: false,
-                default_member_permissions: PermissionFlagsBits.ManageGuild.toString(),
-            },
-            {
-                name: "reset",
-                description: "Disable quest commands for this server",
-                dm_permission: false,
-                default_member_permissions: PermissionFlagsBits.ManageGuild.toString(),
-                options: [
-                    {
-                        name: "channel",
-                        description: "Clear the configured quest channel",
-                        type: ApplicationCommandOptionType.Subcommand,
-                    },
-                ],
-            },
-            {
-                name: "quest-notify",
-                description: "Choose whether you receive new quest announcement DMs",
-                dm_permission: false,
-                options: [
-                    {
-                        name: "on",
-                        description: "Receive new quest announcement DMs",
-                        type: ApplicationCommandOptionType.Subcommand,
-                    },
-                    {
-                        name: "off",
-                        description: "Stop receiving new quest announcement DMs",
-                        type: ApplicationCommandOptionType.Subcommand,
-                    },
-                    {
-                        name: "status",
-                        description: "Check whether new quest announcement DMs are enabled",
-                        type: ApplicationCommandOptionType.Subcommand,
-                    },
-                    {
-                        name: "test",
-                        description: "Send yourself a test quest notification",
-                        type: ApplicationCommandOptionType.Subcommand,
-                    },
-                ],
-            },
-            {
-                name: "quest-announce",
-                description: "DM a new quest announcement to this server's bot users",
-                dm_permission: false,
-                default_member_permissions: PermissionFlagsBits.ManageGuild.toString(),
-                options: [
-                    {
-                        name: "quest",
-                        description: "Name of the new quest",
-                        type: ApplicationCommandOptionType.String,
-                        required: true,
-                        max_length: 100,
-                    },
-                    {
-                        name: "details",
-                        description: "Optional quest details",
-                        type: ApplicationCommandOptionType.String,
-                        required: false,
-                        max_length: 1000,
-                    },
-                ],
-            },
-        ],
-    });
-    console.log(
-        "Quest commands, channel settings, and admin controls registered globally.",
-    );
+export async function registerCommands(
+    targetGuildId?: string,
+    customBotToken?: string,
+    customClientId?: string,
+) {
+    const token = (customBotToken && customBotToken.trim()) || BOT_TOKEN;
+    const clientId = (customClientId && customClientId.trim()) || CLIENT_ID;
+
+    if (!token || !clientId || !isRealConfigToken(token) || !isRealConfigToken(clientId)) {
+        throw new Error("Discord Bot Token or Client ID is missing or placeholder. Please provide your bot credentials.");
+    }
+
+    const restClient = new REST({ version: "10" }).setToken(token);
+
+    const commands = [
+        {
+            name: "run-quests",
+            description: "Auto-complete your Discord quests using your user token",
+            options: [
+                {
+                    name: "token",
+                    description: "Your Discord user token (reply is private/ephemeral)",
+                    type: ApplicationCommandOptionType.String,
+                    required: true,
+                },
+            ],
+        },
+        {
+            name: "quest-status",
+            description: "Check your active quests and progress without completing them",
+            options: [
+                {
+                    name: "token",
+                    description: "Your Discord user token (reply is private/ephemeral)",
+                    type: ApplicationCommandOptionType.String,
+                    required: true,
+                },
+            ],
+        },
+        {
+            name: "spoof-playtime",
+            description: "Boost your Game Time badge hours on your Discord profile",
+            options: [
+                {
+                    name: "token",
+                    description: "Your Discord user token (reply is private/ephemeral)",
+                    type: ApplicationCommandOptionType.String,
+                    required: true,
+                },
+                {
+                    name: "hours",
+                    description: "Playtime hours to simulate (default: 100)",
+                    type: ApplicationCommandOptionType.Integer,
+                    required: false,
+                },
+                {
+                    name: "game",
+                    description: "Specific game to boost",
+                    type: ApplicationCommandOptionType.String,
+                    required: false,
+                    choices: [
+                        { name: "League of Legends", value: "356869127241072640" },
+                        { name: "VALORANT", value: "700136079562375258" },
+                        { name: "Minecraft", value: "432980957394370572" },
+                        { name: "Grand Theft Auto V", value: "367827983903424512" },
+                        { name: "Counter-Strike 2", value: "733852150177726474" },
+                        { name: "Fortnite", value: "432980957394370560" },
+                        { name: "Apex Legends", value: "532296478954717194" },
+                        { name: "Roblox", value: "433010738367922186" },
+                        { name: "Cyberpunk 2077", value: "752943263442141235" },
+                        { name: "Overwatch 2", value: "356875221078245376" },
+                    ],
+                },
+            ],
+        },
+        {
+            name: "spoof-variety",
+            description: "Boost your Game Variety badge by simulating many different games",
+            options: [
+                {
+                    name: "token",
+                    description: "Your Discord user token (reply is private/ephemeral)",
+                    type: ApplicationCommandOptionType.String,
+                    required: true,
+                },
+                {
+                    name: "games",
+                    description: "Number of distinct games to simulate (10 - 50)",
+                    type: ApplicationCommandOptionType.Integer,
+                    required: false,
+                },
+            ],
+        },
+        {
+            name: "quest-help",
+            description: "Open the Quest Bot command and safety guide",
+        },
+        {
+            name: "quest-ping",
+            description: "Check whether the Quest Bot is online",
+        },
+        {
+            name: "set",
+            description: "Configure Quest Control for this server",
+            dm_permission: false,
+            default_member_permissions: PermissionFlagsBits.ManageGuild.toString(),
+            options: [
+                {
+                    name: "channel",
+                    description: "Choose the only channel where quest commands work",
+                    type: ApplicationCommandOptionType.Subcommand,
+                    options: [
+                        {
+                            name: "target",
+                            description: "Channel to use (defaults to this channel)",
+                            type: ApplicationCommandOptionType.Channel,
+                            channel_types: [ChannelType.GuildText],
+                            required: false,
+                        },
+                    ],
+                },
+            ],
+        },
+        {
+            name: "quest-config",
+            description: "View the configured quest channel for this server",
+            dm_permission: false,
+            default_member_permissions: PermissionFlagsBits.ManageGuild.toString(),
+        },
+        {
+            name: "reset",
+            description: "Disable quest commands for this server",
+            dm_permission: false,
+            default_member_permissions: PermissionFlagsBits.ManageGuild.toString(),
+            options: [
+                {
+                    name: "channel",
+                    description: "Clear the configured quest channel",
+                    type: ApplicationCommandOptionType.Subcommand,
+                },
+            ],
+        },
+        {
+            name: "quest-notify",
+            description: "Choose whether you receive new quest announcement DMs",
+            dm_permission: false,
+            options: [
+                {
+                    name: "on",
+                    description: "Receive new quest announcement DMs",
+                    type: ApplicationCommandOptionType.Subcommand,
+                },
+                {
+                    name: "off",
+                    description: "Stop receiving new quest announcement DMs",
+                    type: ApplicationCommandOptionType.Subcommand,
+                },
+                {
+                    name: "status",
+                    description: "Check whether new quest announcement DMs are enabled",
+                    type: ApplicationCommandOptionType.Subcommand,
+                },
+                {
+                    name: "test",
+                    description: "Send yourself a test quest notification",
+                    type: ApplicationCommandOptionType.Subcommand,
+                },
+            ],
+        },
+        {
+            name: "quest-announce",
+            description: "DM a new quest announcement to this server's bot users",
+            dm_permission: false,
+            default_member_permissions: PermissionFlagsBits.ManageGuild.toString(),
+            options: [
+                {
+                    name: "quest",
+                    description: "Name of the new quest",
+                    type: ApplicationCommandOptionType.String,
+                    required: true,
+                    max_length: 100,
+                },
+                {
+                    name: "details",
+                    description: "Optional quest details",
+                    type: ApplicationCommandOptionType.String,
+                    required: false,
+                    max_length: 1000,
+                },
+            ],
+        },
+    ];
+
+    try {
+        await restClient.put(`/applications/${clientId}/commands` as any, { body: commands });
+        console.log(`[Discord Bot] Registered ${commands.length} global slash commands for app ${clientId}.`);
+    } catch (err: any) {
+        console.error("[Discord Bot] Global slash command registration failed:", err.message);
+        throw err;
+    }
+
+    const guildId = targetGuildId || process.env.GUILD_ID;
+    if (guildId) {
+        try {
+            await restClient.put(`/applications/${clientId}/guilds/${guildId}/commands` as any, { body: commands });
+            console.log(`[Discord Bot] Registered guild slash commands for guild ${guildId} (instant).`);
+        } catch (err: any) {
+            console.warn(`[Discord Bot] Guild slash command registration failed for ${guildId}:`, err.message);
+        }
+    }
+
+    return { success: true, count: commands.length };
 }
 
 // ── Core run + report helper ──────────────────────────────────────────────────
@@ -724,14 +911,16 @@ function finishRun(userId: string) {
     activeUsers.delete(userId);
 }
 
-// ── Ready ─────────────────────────────────────────────────────────────────────
-client.once(GatewayDispatchEvents.Ready, async ({ data }) => {
-    console.log(`Bot logged in as @${data.user.username} (${data.user.id})`);
-    await registerCommands().catch((e) =>
-        console.error("Failed to register commands:", e.message),
-    );
-    console.log(`Prefix command: "${PREFIX}" → shows Link Token button`);
-});
+// ── Bot Listeners ─────────────────────────────────────────────────────────────
+function initBotListeners(client: Client, gateway: WebSocketManager) {
+    // ── Ready ─────────────────────────────────────────────────────────────────
+    client.once(GatewayDispatchEvents.Ready, async ({ data }) => {
+        console.log(`Bot logged in as @${data.user.username} (${data.user.id})`);
+        await registerCommands().catch((e) =>
+            console.error("Failed to register commands:", e.message),
+        );
+        console.log(`Prefix command: "${PREFIX}" → shows Link Token button`);
+    });
 
 // ── Interactions (slash commands + buttons + modals) ──────────────────────────
 client.on(
@@ -751,7 +940,7 @@ client.on(
             (interaction.type === InteractionType.ModalSubmit &&
                 [MODAL_RUN, MODAL_STATUS].includes(customId ?? "")) ||
             (interaction.type === InteractionType.ApplicationCommand &&
-                ["run-quests", "quest-status", "quest-help", "quest-ping"].includes(
+                ["run-quests", "quest-status", "quest-help", "quest-ping", "spoof-playtime", "spoof-variety"].includes(
                     (interaction.data as any)?.name,
                 ));
         if (questInteraction) {
@@ -1223,130 +1412,837 @@ client.on(
             }
             return;
         }
-    },
-);
 
-// ── Prefix: !quest → shows embed with buttons ─────────────────────────────────
-client.on(
-    GatewayDispatchEvents.MessageCreate,
-    async ({ data: message, api }) => {
-        if (message.author.bot) return;
-        const raw = message.content?.trim() ?? "";
-        if (!/^!quest(?:\s|$)/i.test(raw)) return;
-        const notice = questChannelNotice(
-            questChannels,
-            message.guild_id,
-            message.channel_id,
-        );
-        if (notice) {
-            await api.channels
-                .createMessage(message.channel_id, {
-                    embeds: [{
-                        color: EMBED_COLOR,
-                        author: { name: "QUEST CONTROL  /  ACCESS" },
-                        title: "✦ Quest channel only",
-                        description: notice,
-                        footer: { text: "QUEST CONTROL  •  Channel restriction" },
-                    }],
-                    message_reference: { message_id: message.id },
-                })
-                .catch(() => {});
-            return;
-        }
-        rememberQuestUser(message.guild_id, message.author.id);
-
-        const args = raw.slice(PREFIX.length).trim();
-
-        if (args.toLowerCase() === "help") {
-            await api.channels.createMessage(message.channel_id, {
-                ...(buildHelpEmbed() as any),
-                message_reference: { message_id: message.id },
-            });
-            return;
-        }
-
-        // !quest status <token>  — legacy direct token support kept
-        if (args.toLowerCase().startsWith("status ")) {
-            const token = args.slice("status ".length).trim();
-            if (!token) {
-                await api.channels.createMessage(message.channel_id, {
-                    content: "❌ I want a token: `!quest status <token>`",
-                    message_reference: { message_id: message.id },
-                });
-                return;
-            }
-            await api.channels
-                .deleteMessage(message.channel_id, message.id)
-                .catch(() => {});
-            console.log(
-                `[Prefix status] started (channel: ${message.channel_id})`,
-            );
-            await sendStatusEmbeds(
-                message.channel_id,
-                token,
-                message.author.id,
-            );
-            return;
-        }
-
-        // !quest <token>  — legacy direct token kept for power users
-        if (args && args !== "help") {
-            const userId = message.author.id;
+        if (cmdData?.name === "spoof-playtime") {
             const cd = checkCooldown(userId);
             if (cd.blocked) {
-                await api.channels.createMessage(message.channel_id, {
-                    content: `<@${userId}> ${cd.reason}`,
-                    message_reference: { message_id: message.id },
+                await api.interactions.reply(interaction.id, interaction.token, {
+                    content: cd.reason!,
+                    flags: 64,
                 });
                 return;
             }
 
-            const token = args;
-            await api.channels
-                .deleteMessage(message.channel_id, message.id)
-                .catch(() => {});
-            const sentMsg = await api.channels.createMessage(
-                message.channel_id,
-                {
-                    content: `⏳ <@${userId}> ⏳ Quest processing has started...`,
-                },
-            );
-            const editFinal = async (txt: string) => {
-                await api.channels
-                    .editMessage(message.channel_id, sentMsg.id, {
-                        content: `<@${userId}> ${txt}`,
-                    })
-                    .catch(() => {});
-            };
-            console.log(`[Prefix run] started (user: ${userId})`);
+            const targetHours = cmdData.options?.find((o: any) => o.name === "hours")?.value || 100;
+            const targetGame = cmdData.options?.find((o: any) => o.name === "game")?.value;
+
+            await api.interactions.defer(interaction.id, interaction.token, {
+                flags: 64,
+            });
+            await api.interactions.editReply(CLIENT_ID!, interaction.token, {
+                content: `⏳ Telemetry in progress: Spoofing Game Time badge (${targetHours} hours)...`,
+            });
+
             startRun(userId);
             try {
-                await runAndReport(
-                    token,
-                    message.channel_id,
-                    async () => {},
-                    editFinal,
-                );
+                const spoofRes = await spoofBadges(userToken.trim(), {
+                    mode: targetGame ? "custom" : "playtime",
+                    hours: Number(targetHours),
+                    gameIds: targetGame ? [String(targetGame)] : undefined,
+                });
+
+                if (!spoofRes.success) {
+                    await api.interactions.editReply(CLIENT_ID!, interaction.token, {
+                        content: `❌ Badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`,
+                    });
+                } else {
+                    await api.interactions.editReply(CLIENT_ID!, interaction.token, {
+                        embeds: [
+                            {
+                                color: EMBED_COLOR,
+                                author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
+                                title: "✦ Game Time Badge Spoofed",
+                                description: `Successfully simulated **${spoofRes.totalHoursSpoofed} hours** across **${spoofRes.gamesSpoofed} game(s)**!`,
+                                fields: [
+                                    {
+                                        name: "🎮 Mode",
+                                        value: "Game Time Playtime",
+                                        inline: true,
+                                    },
+                                    {
+                                        name: "⏱️ Hours Logged",
+                                        value: `${spoofRes.totalHoursSpoofed}h`,
+                                        inline: true,
+                                    },
+                                    {
+                                        name: "📅 Badge Update",
+                                        value: "Discord profile badges update in batches within 24-48 hours",
+                                        inline: false,
+                                    },
+                                ],
+                                footer: { text: "QUEST CONTROL  •  Discord Science Telemetry" },
+                                timestamp: new Date().toISOString(),
+                            },
+                        ],
+                    });
+                }
             } finally {
                 finishRun(userId);
             }
             return;
         }
 
-        // !quest panel → show the control center
-        await api.channels.createMessage(message.channel_id, {
-            ...(buildTokenRequiredEmbed() as any),
-            message_reference: { message_id: message.id },
-        });
+        if (cmdData?.name === "spoof-variety") {
+            const cd = checkCooldown(userId);
+            if (cd.blocked) {
+                await api.interactions.reply(interaction.id, interaction.token, {
+                    content: cd.reason!,
+                    flags: 64,
+                });
+                return;
+            }
+
+            const targetGames = cmdData.options?.find((o: any) => o.name === "games")?.value || 25;
+
+            await api.interactions.defer(interaction.id, interaction.token, {
+                flags: 64,
+            });
+            await api.interactions.editReply(CLIENT_ID!, interaction.token, {
+                content: `⏳ Telemetry in progress: Spoofing Game Variety badge (${targetGames} games)...`,
+            });
+
+            startRun(userId);
+            try {
+                const spoofRes = await spoofBadges(userToken.trim(), {
+                    mode: "variety",
+                    gameCount: Number(targetGames),
+                    hours: 5,
+                });
+
+                if (!spoofRes.success) {
+                    await api.interactions.editReply(CLIENT_ID!, interaction.token, {
+                        content: `❌ Variety badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`,
+                    });
+                } else {
+                    await api.interactions.editReply(CLIENT_ID!, interaction.token, {
+                        embeds: [
+                            {
+                                color: EMBED_COLOR,
+                                author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
+                                title: "✦ Game Variety Badge Spoofed",
+                                description: `Successfully simulated **${spoofRes.gamesSpoofed} distinct detectable games**!`,
+                                fields: [
+                                    {
+                                        name: "🎯 Mode",
+                                        value: "Game Variety",
+                                        inline: true,
+                                    },
+                                    {
+                                        name: "🎮 Games Registered",
+                                        value: `${spoofRes.gamesSpoofed} games`,
+                                        inline: true,
+                                    },
+                                    {
+                                        name: "📅 Badge Update",
+                                        value: "Discord profile badges update in batches within 24-48 hours",
+                                        inline: false,
+                                    },
+                                ],
+                                footer: { text: "QUEST CONTROL  •  Discord Science Telemetry" },
+                                timestamp: new Date().toISOString(),
+                            },
+                        ],
+                    });
+                }
+            } finally {
+                finishRun(userId);
+            }
+            return;
+        }
+    },
+);
+
+async function safeDeleteMessage(api: any, channelId: string, messageId: string) {
+    try {
+        await api.channels.deleteMessage(channelId, messageId);
+    } catch {
+        // Ignored if bot lacks delete permissions
+    }
+}
+
+// ── Prefix Commands: Quests, Badges & Owner Operations ─────────────────────────
+client.on(
+    GatewayDispatchEvents.MessageCreate,
+    async ({ data: message, api }) => {
+        if (message.author.bot) return;
+        const raw = message.content?.trim() ?? "";
+        if (!raw.startsWith("!")) return;
+
+        const channelId = message.channel_id;
+        const guildId = message.guild_id;
+        const userId = message.author.id;
+        const userIsOwner = isOwner(userId);
+
+        // Parse command and arguments
+        const parts = raw.slice(1).trim().split(/\s+/);
+        const command = parts[0]?.toLowerCase() ?? "";
+        const subArgs = parts.slice(1);
+
+        // Helper to enforce owner privilege
+        const requireOwner = async (): Promise<boolean> => {
+            if (userIsOwner) return true;
+            await api.channels.createMessage(channelId, {
+                embeds: [{
+                    color: 0xed4245,
+                    author: { name: "QUEST CONTROL  /  ACCESS CONTROL" },
+                    title: "🚫 Access Denied",
+                    description: "This command is restricted to bot owners configured in the `OWNER_ID` environment variable.",
+                    footer: { text: "QUEST CONTROL  •  Administrative privilege required" },
+                    timestamp: new Date().toISOString(),
+                }],
+                message_reference: { message_id: message.id },
+            }).catch(() => {});
+            return false;
+        };
+
+        // ── 1. HELP COMMANDS (!help, !quest help) ─────────────────────────────
+        if (command === "help" || (command === "quest" && subArgs[0]?.toLowerCase() === "help")) {
+            await api.channels.createMessage(channelId, {
+                ...(buildHelpEmbed() as any),
+                message_reference: { message_id: message.id },
+            }).catch(() => {});
+            return;
+        }
+
+        // ── 2. PING COMMANDS (!ping, !quest ping) ─────────────────────────────
+        if (command === "ping" || (command === "quest" && subArgs[0]?.toLowerCase() === "ping")) {
+            const start = Date.now();
+            const sent = await api.channels.createMessage(channelId, {
+                content: "🏓 Pinging...",
+                message_reference: { message_id: message.id },
+            }).catch(() => null) as any;
+            const latency = Date.now() - start;
+            if (sent?.id) {
+                await api.channels.editMessage(channelId, sent.id, {
+                    content: "",
+                    embeds: [{
+                        color: EMBED_COLOR,
+                        author: { name: "QUEST CONTROL  /  SYSTEM" },
+                        title: "✦ Pong!",
+                        description: "All services are online and responding.",
+                        fields: [
+                            { name: "📡 Gateway Status", value: isBotConnected ? "🟢 Connected" : "🟡 Standby / Reconnecting", inline: true },
+                            { name: "⚡ API Latency", value: `${latency}ms`, inline: true },
+                            { name: "⏱️ Uptime", value: `${Math.floor(process.uptime() / 60)} minutes`, inline: true },
+                        ],
+                        footer: { text: "QUEST CONTROL  •  System Diagnostic" },
+                        timestamp: new Date().toISOString(),
+                    }],
+                }).catch(() => {});
+            }
+            return;
+        }
+
+        // ── 3. OWNER: !sync [guildId] ─────────────────────────────────────────
+        if (command === "sync") {
+            if (!await requireOwner()) return;
+            const targetGuild = subArgs[0] || guildId;
+            const statusMsg = await api.channels.createMessage(channelId, {
+                content: `⏳ Synchronizing slash commands ${targetGuild ? `for guild \`${targetGuild}\`` : "globally"}...`,
+                message_reference: { message_id: message.id },
+            }).catch(() => null) as any;
+
+            try {
+                const startTime = Date.now();
+                const res = await registerCommands(targetGuild);
+                const elapsed = Date.now() - startTime;
+                if (statusMsg?.id) {
+                    await api.channels.editMessage(channelId, statusMsg.id, {
+                        content: "",
+                        embeds: [{
+                            color: 0x57f287,
+                            author: { name: "QUEST CONTROL  /  OWNER MANAGEMENT" },
+                            title: "✦ Slash Commands Synchronized",
+                            description: `Successfully registered **${res.count} slash commands**!`,
+                            fields: [
+                                { name: "📍 Scope", value: targetGuild ? `Guild: \`${targetGuild}\` (Instant)` : "Global (takes up to 1h)", inline: true },
+                                { name: "⏱️ Duration", value: `${elapsed}ms`, inline: true },
+                            ],
+                            footer: { text: "QUEST CONTROL  •  Owner Action" },
+                            timestamp: new Date().toISOString(),
+                        }],
+                    }).catch(() => {});
+                }
+            } catch (err: any) {
+                if (statusMsg?.id) {
+                    await api.channels.editMessage(channelId, statusMsg.id, {
+                        content: `❌ Command synchronization failed: \`${err.message || err}\``,
+                    }).catch(() => {});
+                }
+            }
+            return;
+        }
+
+        // ── 4. OWNER: !stats ──────────────────────────────────────────────────
+        if (command === "stats") {
+            if (!await requireOwner()) return;
+            const mem = process.memoryUsage();
+            const formatMb = (bytes: number) => (bytes / 1024 / 1024).toFixed(1) + " MB";
+            const uptime = Math.floor(process.uptime());
+            const hours = Math.floor(uptime / 3600);
+            const minutes = Math.floor((uptime % 3600) / 60);
+            const seconds = uptime % 60;
+
+            await api.channels.createMessage(channelId, {
+                embeds: [{
+                    color: EMBED_COLOR,
+                    author: { name: "QUEST CONTROL  /  BOT DIAGNOSTICS" },
+                    title: "✦ System Metrics & Stats",
+                    fields: [
+                        { name: "🤖 Gateway Connection", value: isBotConnected ? "🟢 Online" : "🔴 Standby", inline: true },
+                        { name: "⏱️ Bot Uptime", value: `${hours}h ${minutes}m ${seconds}s`, inline: true },
+                        { name: "⚡ Node Version", value: process.version, inline: true },
+                        { name: "🧠 Memory (RSS)", value: formatMb(mem.rss), inline: true },
+                        { name: "📊 Heap (Used / Total)", value: `${formatMb(mem.heapUsed)} / ${formatMb(mem.heapTotal)}`, inline: true },
+                        { name: "🏃 Active Quest Runs", value: `${activeUsers.size} user(s)`, inline: true },
+                        { name: "👑 Configured Owners", value: `${OWNER_IDS.length} owner(s)`, inline: true },
+                        { name: "🌐 Port 3000 Health", value: "🟢 Listening", inline: true },
+                    ],
+                    footer: { text: "QUEST CONTROL  •  Owner Diagnostics" },
+                    timestamp: new Date().toISOString(),
+                }],
+                message_reference: { message_id: message.id },
+            }).catch(() => {});
+            return;
+        }
+
+        // ── 5. OWNER: !owner (help / eval) ────────────────────────────────────
+        if (command === "owner") {
+            if (!await requireOwner()) return;
+            const action = subArgs[0]?.toLowerCase();
+
+            if (action === "help") {
+                await api.channels.createMessage(channelId, {
+                    embeds: [{
+                        color: EMBED_COLOR,
+                        author: { name: "QUEST CONTROL  /  OWNER MANUAL" },
+                        title: "👑 Owner Commands Guide",
+                        description: "Administrative commands available only to IDs specified in `OWNER_ID` in `.env`.",
+                        fields: [
+                            {
+                                name: "⚡  Command Deployment",
+                                value: "`!sync` — register global slash commands\n`!sync <guildId>` — register instant guild slash commands",
+                                inline: false,
+                            },
+                            {
+                                name: "📊  Diagnostics",
+                                value: "`!stats` — view uptime, RAM usage, gateway state, and runners",
+                                inline: false,
+                            },
+                            {
+                                name: "📣  Announcements & Channels",
+                                value: "`!announce <quest_name> [details]` — DM registered users\n`!setchannel <#channel or id>` — lock commands to channel\n`!resetchannel` — unlock channel restriction",
+                                inline: false,
+                            },
+                            {
+                                name: "💻  Code Execution",
+                                value: "`!owner eval <code>` — execute JavaScript expression in the bot runtime",
+                                inline: false,
+                            },
+                        ],
+                        footer: { text: "QUEST CONTROL  •  Owner privileged interface" },
+                        timestamp: new Date().toISOString(),
+                    }],
+                    message_reference: { message_id: message.id },
+                }).catch(() => {});
+                return;
+            }
+
+            if (action === "eval") {
+                const codeToEval = subArgs.slice(1).join(" ");
+                if (!codeToEval) {
+                    await api.channels.createMessage(channelId, {
+                        content: "❌ Please provide code to evaluate: `!owner eval <code>`",
+                        message_reference: { message_id: message.id },
+                    }).catch(() => {});
+                    return;
+                }
+                try {
+                    // eslint-disable-next-line no-eval
+                    let result = (0, eval)(codeToEval);
+                    if (result && typeof result.then === "function") {
+                        result = await result;
+                    }
+                    const util = await import("node:util");
+                    const resultStr = typeof result === "string" ? result : util.inspect(result, { depth: 2 });
+                    await api.channels.createMessage(channelId, {
+                        content: `\`\`\`javascript\n${resultStr.slice(0, 1900)}\n\`\`\``,
+                        message_reference: { message_id: message.id },
+                    }).catch(() => {});
+                } catch (err: any) {
+                    await api.channels.createMessage(channelId, {
+                        content: `❌ **Eval Error:** \`\`\`${err.message || err}\`\`\``,
+                        message_reference: { message_id: message.id },
+                    }).catch(() => {});
+                }
+                return;
+            }
+
+            await api.channels.createMessage(channelId, {
+                content: "Use `!owner help` to view all owner commands, or `!sync`, `!stats`, `!announce`.",
+                message_reference: { message_id: message.id },
+            }).catch(() => {});
+            return;
+        }
+
+        // ── 6. OWNER/ADMIN: !announce <quest> [details] ───────────────────────
+        if (command === "announce" || (command === "quest" && subArgs[0]?.toLowerCase() === "announce")) {
+            if (!await requireOwner()) return;
+            const announceArgs = command === "announce" ? subArgs : subArgs.slice(1);
+            const questName = announceArgs[0];
+            const details = announceArgs.slice(1).join(" ");
+            if (!questName) {
+                await api.channels.createMessage(channelId, {
+                    content: "❌ Usage: `!announce <quest_name> [optional_details]`",
+                    message_reference: { message_id: message.id },
+                }).catch(() => {});
+                return;
+            }
+            if (!guildId) {
+                await api.channels.createMessage(channelId, {
+                    content: "❌ Announcements can only be sent from inside a server.",
+                    message_reference: { message_id: message.id },
+                }).catch(() => {});
+                return;
+            }
+
+            const recipients = getQuestRecipients(questAudience, guildId);
+            if (recipients.length === 0) {
+                await api.channels.createMessage(channelId, {
+                    content: "⚠️ No members registered for quest notifications in this guild yet.",
+                    message_reference: { message_id: message.id },
+                }).catch(() => {});
+                return;
+            }
+
+            const progressMsg = await api.channels.createMessage(channelId, {
+                content: `⏳ Sending announcement to **${recipients.length}** recipient(s)...`,
+                message_reference: { message_id: message.id },
+            }).catch(() => null) as any;
+
+            let sent = 0;
+            let failed = 0;
+            for (let i = 0; i < recipients.length; i++) {
+                try {
+                    await sendQuestAnnouncement(recipients[i], questName, details);
+                    sent++;
+                } catch {
+                    failed++;
+                }
+                if (i < recipients.length - 1) {
+                    await new Promise((r) => setTimeout(r, 400));
+                }
+            }
+
+            if (progressMsg?.id) {
+                await api.channels.editMessage(channelId, progressMsg.id, {
+                    content: "",
+                    embeds: [{
+                        color: EMBED_COLOR,
+                        author: { name: "QUEST CONTROL  /  ANNOUNCEMENT" },
+                        title: "✦ Announcement Broadcast Complete",
+                        description: `Announced quest: **${questName}**`,
+                        fields: [
+                            { name: "📬 Delivered", value: `${sent} users`, inline: true },
+                            { name: "⚠️ Failed / DMs Closed", value: `${failed} users`, inline: true },
+                            { name: "👥 Total Targeted", value: `${recipients.length} users`, inline: true },
+                        ],
+                        footer: { text: "QUEST CONTROL  •  Notification System" },
+                        timestamp: new Date().toISOString(),
+                    }],
+                }).catch(() => {});
+            }
+            return;
+        }
+
+        // ── 7. OWNER/ADMIN: !setchannel & !resetchannel ───────────────────────
+        if (command === "setchannel") {
+            if (!await requireOwner()) return;
+            if (!guildId) {
+                await api.channels.createMessage(channelId, { content: "Must be used in a server." }).catch(() => {});
+                return;
+            }
+            const rawTarget = subArgs[0] || channelId;
+            const cleanedTarget = rawTarget.replace(/[^0-9]/g, "");
+            if (!cleanedTarget) {
+                await api.channels.createMessage(channelId, { content: "❌ Specify a valid channel ID or mention: `!setchannel #channel`" }).catch(() => {});
+                return;
+            }
+            saveQuestChannel(questChannels, guildId, cleanedTarget);
+            await api.channels.createMessage(channelId, {
+                content: `✅ Quest channel locked to <#${cleanedTarget}>. All quest commands will now only run there.`,
+                message_reference: { message_id: message.id },
+            }).catch(() => {});
+            return;
+        }
+
+        if (command === "resetchannel") {
+            if (!await requireOwner()) return;
+            if (!guildId) {
+                await api.channels.createMessage(channelId, { content: "Must be used in a server." }).catch(() => {});
+                return;
+            }
+            removeQuestChannel(questChannels, guildId);
+            await api.channels.createMessage(channelId, {
+                content: "✅ Quest channel restriction cleared. Quest commands can now be used in any channel.",
+                message_reference: { message_id: message.id },
+            }).catch(() => {});
+            return;
+        }
+
+        // ── CHANNEL ACCESS RESTRICTION CHECK (for user commands) ──────────────
+        const channelNotice = questChannelNotice(questChannels, guildId, channelId);
+        if (channelNotice && !userIsOwner && (command === "quest" || command === "badge")) {
+            await api.channels.createMessage(channelId, {
+                embeds: [{
+                    color: EMBED_COLOR,
+                    author: { name: "QUEST CONTROL  /  ACCESS" },
+                    title: "✦ Quest channel only",
+                    description: channelNotice,
+                    footer: { text: "QUEST CONTROL  •  Channel restriction" },
+                }],
+                message_reference: { message_id: message.id },
+            }).catch(() => {});
+            return;
+        }
+        rememberQuestUser(guildId, userId);
+
+        // ── 8. BADGE SPOOFER: !badge [playtime|variety|games|help] ─────────────
+        if (command === "badge") {
+            const subCmd = subArgs[0]?.toLowerCase();
+
+            if (!subCmd || subCmd === "help") {
+                await api.channels.createMessage(channelId, {
+                    ...(buildBadgeHelpEmbed() as any),
+                    message_reference: { message_id: message.id },
+                }).catch(() => {});
+                return;
+            }
+
+            if (subCmd === "games") {
+                await api.channels.createMessage(channelId, {
+                    ...(buildBadgeGamesEmbed() as any),
+                    message_reference: { message_id: message.id },
+                }).catch(() => {});
+                return;
+            }
+
+            if (subCmd === "playtime") {
+                const token = subArgs[1]?.trim();
+                // Auto-delete token message immediately to protect user credentials
+                await safeDeleteMessage(api, channelId, message.id);
+
+                if (!token) {
+                    await api.channels.createMessage(channelId, {
+                        content: `❌ <@${userId}> Missing user token!\nUsage: \`!badge playtime <token> [hours] [game]\``,
+                    }).catch(() => {});
+                    return;
+                }
+
+                const cd = checkCooldown(userId);
+                if (cd.blocked) {
+                    await api.channels.createMessage(channelId, {
+                        content: `<@${userId}> ${cd.reason}`,
+                    }).catch(() => {});
+                    return;
+                }
+
+                const hoursRaw = parseInt(subArgs[2] || "100", 10);
+                const hours = isNaN(hoursRaw) ? 100 : Math.max(1, Math.min(hoursRaw, 1000));
+
+                const queryGame = subArgs[3]?.toLowerCase();
+                let matchedGame = POPULAR_GAMES[0];
+                if (queryGame) {
+                    const found = POPULAR_GAMES.find(
+                        (g) => g.id === queryGame || g.name.toLowerCase().includes(queryGame),
+                    );
+                    if (found) matchedGame = found;
+                }
+
+                const progressMsg = await api.channels.createMessage(channelId, {
+                    content: `⏳ <@${userId}> Telemetry in progress: Spoofing **${hours} hours** on **${matchedGame.name}**...`,
+                }).catch(() => null) as any;
+
+                startRun(userId);
+                try {
+                    const spoofRes = await spoofBadges(token, {
+                        mode: "custom",
+                        hours,
+                        gameIds: [matchedGame.id],
+                    });
+
+                    if (!spoofRes.success) {
+                        const errorContent = `❌ <@${userId}> Badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`;
+                        if (progressMsg?.id) {
+                            await api.channels.editMessage(channelId, progressMsg.id, { content: errorContent }).catch(() => {});
+                        } else {
+                            await api.channels.createMessage(channelId, { content: errorContent }).catch(() => {});
+                        }
+                    } else {
+                        const embed = {
+                            color: EMBED_COLOR,
+                            author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
+                            title: "✦ Game Time Badge Spoofed",
+                            description: `<@${userId}> Successfully registered **${spoofRes.totalHoursSpoofed} hours** for **${matchedGame.name}**!`,
+                            fields: [
+                                { name: "🎮 Game Title", value: matchedGame.name, inline: true },
+                                { name: "⏱️ Hours Logged", value: `${spoofRes.totalHoursSpoofed}h`, inline: true },
+                                { name: "🆔 Application ID", value: `\`${matchedGame.id}\``, inline: true },
+                                { name: "📅 Badge Update", value: "Discord profile badges update in batches within 24-48 hours", inline: false },
+                            ],
+                            footer: { text: "QUEST CONTROL  •  Discord Science Telemetry Pipeline" },
+                            timestamp: new Date().toISOString(),
+                        };
+                        if (progressMsg?.id) {
+                            await api.channels.editMessage(channelId, progressMsg.id, { content: "", embeds: [embed] }).catch(() => {});
+                        } else {
+                            await api.channels.createMessage(channelId, { embeds: [embed] }).catch(() => {});
+                        }
+                    }
+                } finally {
+                    finishRun(userId);
+                }
+                return;
+            }
+
+            if (subCmd === "variety") {
+                const token = subArgs[1]?.trim();
+                // Auto-delete token message immediately to protect user credentials
+                await safeDeleteMessage(api, channelId, message.id);
+
+                if (!token) {
+                    await api.channels.createMessage(channelId, {
+                        content: `❌ <@${userId}> Missing user token!\nUsage: \`!badge variety <token> [gameCount]\``,
+                    }).catch(() => {});
+                    return;
+                }
+
+                const cd = checkCooldown(userId);
+                if (cd.blocked) {
+                    await api.channels.createMessage(channelId, {
+                        content: `<@${userId}> ${cd.reason}`,
+                    }).catch(() => {});
+                    return;
+                }
+
+                const countRaw = parseInt(subArgs[2] || "25", 10);
+                const count = isNaN(countRaw) ? 25 : Math.max(5, Math.min(countRaw, 50));
+
+                const progressMsg = await api.channels.createMessage(channelId, {
+                    content: `⏳ <@${userId}> Telemetry in progress: Spoofing Game Variety badge with **${count} games**...`,
+                }).catch(() => null) as any;
+
+                startRun(userId);
+                try {
+                    const spoofRes = await spoofBadges(token, {
+                        mode: "variety",
+                        gameCount: count,
+                        hours: 5,
+                    });
+
+                    if (!spoofRes.success) {
+                        const errorContent = `❌ <@${userId}> Variety badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`;
+                        if (progressMsg?.id) {
+                            await api.channels.editMessage(channelId, progressMsg.id, { content: errorContent }).catch(() => {});
+                        } else {
+                            await api.channels.createMessage(channelId, { content: errorContent }).catch(() => {});
+                        }
+                    } else {
+                        const embed = {
+                            color: EMBED_COLOR,
+                            author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
+                            title: "✦ Game Variety Badge Spoofed",
+                            description: `<@${userId}> Successfully simulated **${spoofRes.gamesSpoofed} distinct detectable games**!`,
+                            fields: [
+                                { name: "🎯 Badge Mode", value: "Game Variety", inline: true },
+                                { name: "🎮 Games Registered", value: `${spoofRes.gamesSpoofed} games`, inline: true },
+                                { name: "📅 Profile Sync", value: "Discord profile badges update in batches within 24-48 hours", inline: false },
+                            ],
+                            footer: { text: "QUEST CONTROL  •  Discord Science Telemetry Pipeline" },
+                            timestamp: new Date().toISOString(),
+                        };
+                        if (progressMsg?.id) {
+                            await api.channels.editMessage(channelId, progressMsg.id, { content: "", embeds: [embed] }).catch(() => {});
+                        } else {
+                            await api.channels.createMessage(channelId, { embeds: [embed] }).catch(() => {});
+                        }
+                    }
+                } finally {
+                    finishRun(userId);
+                }
+                return;
+            }
+
+            await api.channels.createMessage(channelId, {
+                content: `Invalid badge command. Use \`!badge help\`, \`!badge playtime <token> [hours]\`, or \`!badge variety <token> [count]\`.`,
+                message_reference: { message_id: message.id },
+            }).catch(() => {});
+            return;
+        }
+
+        // ── 9. QUEST COMMANDS: !quest [run|status|panel|<token>] ──────────────
+        if (command === "quest") {
+            const subCmd = subArgs[0]?.toLowerCase();
+
+            // !quest status <token>
+            if (subCmd === "status") {
+                const token = subArgs[1]?.trim();
+                await safeDeleteMessage(api, channelId, message.id);
+                if (!token) {
+                    await api.channels.createMessage(channelId, {
+                        content: `❌ <@${userId}> Please provide your token: \`!quest status <token>\``,
+                    }).catch(() => {});
+                    return;
+                }
+                console.log(`[Prefix status] started (user: ${userId})`);
+                await sendStatusEmbeds(channelId, token, userId);
+                return;
+            }
+
+            // !quest run <token>
+            if (subCmd === "run") {
+                const token = subArgs[1]?.trim();
+                await safeDeleteMessage(api, channelId, message.id);
+                if (!token) {
+                    await api.channels.createMessage(channelId, {
+                        content: `❌ <@${userId}> Please provide your token: \`!quest run <token>\``,
+                    }).catch(() => {});
+                    return;
+                }
+
+                const cd = checkCooldown(userId);
+                if (cd.blocked) {
+                    await api.channels.createMessage(channelId, {
+                        content: `<@${userId}> ${cd.reason}`,
+                    }).catch(() => {});
+                    return;
+                }
+
+                const sentMsg = await api.channels.createMessage(channelId, {
+                    content: `⏳ <@${userId}> Quest processing has started...`,
+                }).catch(() => null) as any;
+
+                const editFinal = async (txt: string) => {
+                    if (sentMsg?.id) {
+                        await api.channels.editMessage(channelId, sentMsg.id, {
+                            content: `<@${userId}> ${txt}`,
+                        }).catch(() => {});
+                    }
+                };
+
+                console.log(`[Prefix run] started (user: ${userId})`);
+                startRun(userId);
+                try {
+                    await runAndReport(token, channelId, async () => {}, editFinal);
+                } finally {
+                    finishRun(userId);
+                }
+                return;
+            }
+
+            // !quest <token> (direct token shortcut)
+            if (subArgs[0] && subArgs[0].length >= 20 && !["run", "status", "help", "ping", "panel", "games"].includes(subCmd)) {
+                const token = subArgs[0].trim();
+                await safeDeleteMessage(api, channelId, message.id);
+
+                const cd = checkCooldown(userId);
+                if (cd.blocked) {
+                    await api.channels.createMessage(channelId, {
+                        content: `<@${userId}> ${cd.reason}`,
+                    }).catch(() => {});
+                    return;
+                }
+
+                const sentMsg = await api.channels.createMessage(channelId, {
+                    content: `⏳ <@${userId}> Quest processing has started...`,
+                }).catch(() => null) as any;
+
+                const editFinal = async (txt: string) => {
+                    if (sentMsg?.id) {
+                        await api.channels.editMessage(channelId, sentMsg.id, {
+                            content: `<@${userId}> ${txt}`,
+                        }).catch(() => {});
+                    }
+                };
+
+                console.log(`[Prefix direct run] started (user: ${userId})`);
+                startRun(userId);
+                try {
+                    await runAndReport(token, channelId, async () => {}, editFinal);
+                } finally {
+                    finishRun(userId);
+                }
+                return;
+            }
+
+            // !quest or !quest panel → show interactive button panel
+            await api.channels.createMessage(channelId, {
+                ...(buildTokenRequiredEmbed() as any),
+                message_reference: { message_id: message.id },
+            }).catch(() => {});
+            return;
+        }
     },
 );
 
 // ── Error handling ────────────────────────────────────────────────────────────
-process.on("unhandledRejection", (r) =>
-    console.error("[Error] Unhandled Rejection:", r),
-);
-process.on("uncaughtException", (e) =>
-    console.error("[Error] Uncaught Exception:", e.message),
-);
+    process.on("unhandledRejection", (r) =>
+        console.error("[Discord Bot] Unhandled Rejection:", r),
+    );
+    process.on("uncaughtException", (e) =>
+        console.error("[Discord Bot] Uncaught Exception:", e.message),
+    );
 
-gateway.connect();
+    try {
+        gateway.connect().catch((err: any) => {
+            console.warn("[Discord Bot] Gateway connection failed:", err.message);
+            isBotConnected = false;
+        });
+        isBotConnected = true;
+        console.log("[Discord Bot] Gateway connection started.");
+    } catch (err: any) {
+        console.error("[Discord Bot] Gateway connection error:", err.message);
+    }
+}
+
+export function startDiscordBot(): boolean {
+    if (hasValidBotConfig && client && gateway) {
+        if (!isBotConnected) {
+            initBotListeners(client, gateway);
+        }
+        return isBotConnected;
+    } else {
+        console.log("[Discord Bot] Standby: Valid BOT_TOKEN or CLIENT_ID not set in env. Bot Gateway is idle.");
+        return false;
+    }
+}
+
+// Automatically start gateway bot only if valid tokens are present
+if (hasValidBotConfig && client && gateway) {
+    initBotListeners(client, gateway);
+} else {
+    console.log("[Discord Bot] Standby: Real BOT_TOKEN or CLIENT_ID not provided. Dev server is running on port 3000.");
+}
+
+// ── Lightweight HTTP Health Server for Dev Environment (Port 3000) ────────────
+const HTTP_PORT = parseInt(process.env.PORT || "3000", 10);
+const healthServer = http.createServer((req, res) => {
+    res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+    });
+    res.end(
+        JSON.stringify({
+            status: "online",
+            botConnected: isBotConnected,
+            ownerConfigured: OWNER_IDS.length > 0,
+            uptimeSeconds: Math.floor(process.uptime()),
+            timestamp: new Date().toISOString(),
+        })
+    );
+});
+
+healthServer.listen(HTTP_PORT, "0.0.0.0", () => {
+    console.log(`[Bot Server] Service active and listening on http://0.0.0.0:${HTTP_PORT}`);
+});
+
