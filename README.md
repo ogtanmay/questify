@@ -1,83 +1,95 @@
-# Discord Quest Bot
+# Discord Quest & Profile Spoofer Bot
 
-A Discord bot that automatically completes Discord Quests for users.
+A minimalistic, modern Discord bot for Discord Quests auto-completion, profile game playtime and live streaming badges, and custom rich presence (VALORANT, VS Code, Minecraft, etc.) built with Discord Components V2.
 
-## Setup on Railway
+## Features
 
-1. Fork/clone this repo to your GitHub
-2. Go to [railway.app](https://railway.app) and create a new project
-3. Select **"Deploy from GitHub repo"** and choose this repo
-4. Add environment variables in Railway dashboard:
-   - `BOT_TOKEN` — Your Discord Bot Token
-   - `CLIENT_ID` — Your Discord Application/Client ID
-5. Deploy! Railway will redeploy when new commits reach the connected `main` branch.
+- **Quest Auto-Completion:** Automatically completes video, desktop, activity, and stream quests.
+- **Discord Badge Spoofer:** Simulates legitimate Discord science telemetry pipeline (`running_game_heartbeat`, `video_stream_started`, `video_stream_ended`, `screenshare_finished`) for:
+  - Game Playtime Badges
+  - Live Streaming Badges
+  - Game Variety Badges (up to 50 distinct games)
+- **Custom Rich Presence for Linked Users:**
+  - VALORANT (`700136079562375258`)
+  - Visual Studio Code (`383226320970055681`)
+  - Minecraft (`432980957394370572`)
+  - League of Legends (`356869127241072640`)
+  - Live Twitch / Streaming status
+- **Minimalist Aesthetic:**
+  - Zero emojis and zero ASCII art in embeds
+  - Modern Discord Components V2 action rows
+  - Interactive String Select Menus for Help and Rich Presence
+- **Token Security:**
+  - Strict modal-only token entry — no plain-text chat shortcuts
+  - Local JSON database storage in `.data/user-tokens.json`
+- **JSON Configuration:**
+  - Primary configuration managed in `config.json` (no `.env` required)
 
-## Automatic Railway redeploys
+## Configuration (`config.json`)
 
-The `.github/workflows/railway-deploy.yml` workflow runs after every push to
-`main`. To enable it with a Railway deploy hook:
+Configure your bot credentials directly in `config.json`:
 
-1. In Railway, open the service settings and create a **Deploy Hook**.
-2. In GitHub, open **Settings → Secrets and variables → Actions**.
-3. Create a repository secret named `RAILWAY_DEPLOY_HOOK_URL` and paste the
-   deploy hook URL there.
+```json
+{
+  "botToken": "YOUR_DISCORD_BOT_TOKEN",
+  "clientId": "YOUR_DISCORD_CLIENT_ID",
+  "ownerIds": ["YOUR_USER_ID"],
+  "guildId": "",
+  "yesCaptchaApiKey": "",
+  "port": 3000,
+  "prefix": "!quest",
+  "defaultPresenceGame": "valorant"
+}
+```
 
-The workflow skips safely until that secret exists. If Railway is already
-connected directly to this repository, Railway's native GitHub integration is
-enough and this hook is optional.
+*Note: Environment variables (`BOT_TOKEN`, `CLIENT_ID`, `PORT`) are supported as fallbacks.*
 
-The separate validation workflow checks TypeScript on every push. It does not
-start a long-running bot process inside GitHub Actions.
+## Key Commands
 
-## Bot Commands
+### Account Management
+- `!link` or `/link` — Open the private modal to link your account token
+- `!unlink` or `/unlink` — Remove your linked account from the bot database
+- `!whoami` or `/whoami` — Check your linked account details
 
-- `/quest-help` — open the command and safety guide
-- `/quest-ping` — check whether the bot is online
-- `/run-quests` — Auto-complete your Discord quests (requires your user token)
-- `/quest-status` — Check your active quests and progress
-- `/quest-config` — Show the configured quest channel (Manage Server required)
-- `/reset channel` — Clear the channel setting and disable quest commands (Manage Server required)
-- `/quest-notify on|off|status|test` — Manage and test new quest announcement DMs
-- `/quest-announce <quest> [details]` — Admin sends an English quest announcement to bot users
-- `!quest` — Show the Quest Control Center
-- `!quest help` — Show the help guide
+### Rich Presence
+- `/presence game preset:valorant` — Set active playing status for VALORANT
+- `/presence game preset:vscode` — Set active playing status for VS Code
+- `/presence clear` — Turn off custom rich presence
+- `!presence` — Open interactive presence control panel with dropdown & buttons
+- `!presence valorant` / `!presence vscode` / `!presence stream` / `!presence clear`
 
-## Set the quest channel
+### Discord Quests
+- `/run-quests` or `!quest run` — Auto-complete all active Discord quests
+- `/quest-status` or `!quest status` — Inspect quest progress and rewards
+- `!quest` or `!quest panel` — Show the interactive button dashboard
 
-Run `/set channel` in the text channel you want to use, or choose a channel
-with the `target` option. This command requires **Manage Server** permission.
-The setting is saved separately for each server. Prefix commands, quest slash
-commands, and the control panel buttons work only in that selected channel.
-Use `/quest-config` to view the setting privately, or `/reset channel` to clear
-it. Clearing the setting disables quest commands until an admin sets a channel
-again.
+### Badges & Playtime
+- `/spoof-playtime [hours] [game]` or `!badge playtime <hours> [game]` — Boost Game Time badge
+- `/spoof-stream [hours] [game]` or `!badge stream <hours> [game]` — Boost Streaming badge
+- `/spoof-variety [count]` or `!badge variety [count]` — Boost Game Variety badge
+- `!badge all <hours>` — Boost both Playtime and Streaming badges together
+- `!badge games` — List top supported detectable games and application IDs
 
-Channel settings are stored in `.data/quest-channels.json` so they survive bot
-process restarts. Keep that data directory available if you move the bot to a
-different machine.
+### Help & Navigation
+- `/quest-help` or `!help` — Open the interactive category dropdown help menu
 
-## New quest announcements
+### Server Administration
+- `!channel-set quest <#channel>` — Lock quest commands to a designated channel
+- `!channel-set badges <#channel>` — Lock badge commands to a designated channel
+- `!channel-set <quest/badges> reset` — Clear channel lock
+- `!channel-set` — View current channel settings
+- `!sync [guildId]` — Force slash command registration
+- `!stats` — View bot uptime, memory usage, and gateway status
 
-When a member uses a quest command in the configured channel, the bot records
-their Discord user ID for this server (it never stores their user token).
-Members can run `/quest-notify off` to opt out, or `/quest-notify on` to opt in
-again. Admins can use `/quest-announce` with a quest name and optional details
-to send an English embed DM to registered recipients. DMs can fail when a user
-does not accept messages from the bot. Recipient tracking begins after this
-feature is installed; the bot has no history of earlier users.
+## Running & Testing
 
-## Environment Variables
+```bash
+# Start bot & health server
+npm start
 
-| Variable | Required | Description |
-|---|---|---|
-| `BOT_TOKEN` | ✅ | Discord Bot Token (from Discord Developer Portal) |
-| `CLIENT_ID` | ✅ | Discord Application Client ID |
+# Run test suite
+npm test
 
-## Getting BOT_TOKEN and CLIENT_ID
-
-1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Create a new application → "Bot" section → copy the token
-3. Copy the Application ID from the General Information page
-
-> Warning: this project currently uses user tokens for quest completion. That
-> can put an account at risk and may violate Discord's Terms of Service.
+# Lint check
+npm run lint
+```

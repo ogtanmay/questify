@@ -3,9 +3,12 @@ const { YesCaptchaSolver } = require('./providers/yescaptcha');
 
 let yesCaptchaClient = null;
 
-if (process.env.YES_CAPTCHA_API_KEY) {
+const { getConfig } = require('./config');
+
+const config = getConfig();
+if (config.yesCaptchaApiKey) {
     console.log('YesCaptcha API key found. Auto captcha solving enabled.');
-    yesCaptchaClient = new YesCaptchaSolver(process.env.YES_CAPTCHA_API_KEY);
+    yesCaptchaClient = new YesCaptchaSolver(config.yesCaptchaApiKey);
 }
 
 function isCaptchaSolvingEnabled() {

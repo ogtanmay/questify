@@ -3,6 +3,7 @@ const {
     GatewayDispatchEvents,
     GatewayIntentBits,
     InteractionType,
+    InteractionResponseType,
     ApplicationCommandOptionType,
     ApplicationCommandType,
     ComponentType,
@@ -15,6 +16,7 @@ const { Client } = require("@discordjs/core");
 const { REST } = require("@discordjs/rest");
 const { WebSocketManager } = require("@discordjs/ws");
 
+const { getConfig, isRealConfigToken } = require("./src/config");
 const { runQuestsForToken, fetchQuestsStatus } = require("./src/questRunner");
 const {
     loadQuestChannels,
@@ -45,25 +47,20 @@ const {
     spoofBadges,
     POPULAR_GAMES,
 } = require("./src/badgeSpoofer");
-const { Emojis, buttonEmoji } = require("./src/emoji");
+const {
+    setUserPresence,
+    clearUserPresence,
+    getUserPresence,
+    GAME_PRESETS,
+} = require("./src/presenceManager");
 
-function isRealConfigToken(val) {
-    if (!val) return false;
-    const lower = val.trim().toLowerCase();
-    if (
-        lower === "your_discord_bot_token_here" ||
-        lower === "your_discord_client_id_here" ||
-        lower === "your_token_here" ||
-        lower === "placeholder" ||
-        lower === ""
-    ) {
-        return false;
-    }
-    return val.trim().length > 10;
-}
-
-const BOT_TOKEN = process.env.BOT_TOKEN || "";
-const CLIENT_ID = process.env.CLIENT_ID || "";
+// ── Configuration (Loaded from config.json with env fallback) ─────────────────
+const config = getConfig();
+const BOT_TOKEN = config.botToken || "";
+const CLIENT_ID = config.clientId || "";
+const OWNER_IDS = config.ownerIds || [];
+const PREFIX = config.prefix || "!quest";
+const HTTP_PORT = config.port || 3000;
 const hasValidBotConfig = isRealConfigToken(BOT_TOKEN) && isRealConfigToken(CLIENT_ID);
 
 let isBotConnected = false;
@@ -72,26 +69,21 @@ function isDiscordBotRunning() {
     return isBotConnected;
 }
 
-const OWNER_IDS = (
-    process.env.OWNER_ID ||
-    process.env.OWNER_IDS ||
-    ""
-)
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-
 function isOwner(userId) {
     if (!userId) return false;
     return OWNER_IDS.includes(userId);
 }
 
-const PREFIX = "!quest";
 const questChannels = loadQuestChannels();
 const categoryChannels = loadCategoryChannels();
 const questAudience = loadQuestAudience();
-const EMBED_COLOR = 0x2b2d31;
-const BRAND_COLOR = EMBED_COLOR;
+
+// ── Minimalist Aesthetic Palette (Zero ASCII, Zero Emojis in Embeds) ──────────
+const COLOR_PRIMARY = 0x5865f2; // Discord Blurple
+const COLOR_NEUTRAL = 0x2b2d31; // Minimalist Dark
+const COLOR_SUCCESS = 0x23a55a; // Emerald Success
+const COLOR_WARNING = 0xfee75c; // Amber Warning
+const COLOR_DANGER = 0xf23f43;  // Crimson Error
 
 const INTENTS =
     GatewayIntentBits.Guilds |
@@ -117,55 +109,59 @@ if (hasValidBotConfig) {
     }
 }
 
-// ── Custom Component IDs ──────────────────────────────────────────────────────
+// ── Component Custom IDs ──────────────────────────────────────────────────────
 const BTN_RUN = "quest_run_btn";
 const BTN_STATUS = "quest_status_btn";
 const BTN_HELP = "quest_help_btn";
 const BTN_LINK = "link_token_open_modal";
 const BTN_LINK_CHECK = "link_status_check";
 const BTN_LINK_UNLINK = "link_unlink_btn";
+const BTN_PRESENCE_MENU = "presence_menu_open";
+const BTN_PRESENCE_VALORANT = "presence_set_valorant";
+const BTN_PRESENCE_VSCODE = "presence_set_vscode";
+const BTN_PRESENCE_CLEAR = "presence_clear_btn";
+const SELECT_HELP_CATEGORY = "help_category_select";
+const SELECT_PRESENCE_GAME = "presence_game_select";
 const MODAL_LINK = "modal_link_token";
 const INPUT_LINK_TOKEN = "user_link_token_input";
 const INPUT_LINK_NOTE = "user_link_note_input";
 
-// ── Helper Labels (Emojis from src/emoji.js) ──────────────────────────────────
+// ── Clean Task Labels (No Emojis) ─────────────────────────────────────────────
 const TASK_LABELS = {
-    WATCH_VIDEO: `${Emojis.TV} Watch Video`,
-    WATCH_VIDEO_ON_MOBILE: `${Emojis.MOBILE} Watch Video on Mobile`,
-    PLAY_ON_DESKTOP: `${Emojis.DESKTOP} Play on Desktop`,
-    PLAY_ON_XBOX: `${Emojis.XBOX} Play on Xbox`,
-    PLAY_ON_PLAYSTATION: `${Emojis.PLAYSTATION} Play on PlayStation`,
-    PLAY_ACTIVITY: `${Emojis.ACTIVITY} Play Activity`,
-    ACHIEVEMENT_IN_ACTIVITY: `${Emojis.TROPHY} Achievement`,
-    STREAM_ON_DESKTOP: `${Emojis.STREAM} Stream on Desktop`,
+    WATCH_VIDEO: "Watch Video",
+    WATCH_VIDEO_ON_MOBILE: "Watch Video on Mobile",
+    PLAY_ON_DESKTOP: "Play on Desktop",
+    PLAY_ON_XBOX: "Play on Xbox",
+    PLAY_ON_PLAYSTATION: "Play on PlayStation",
+    PLAY_ACTIVITY: "Play Activity",
+    ACHIEVEMENT_IN_ACTIVITY: "Activity Achievement",
+    STREAM_ON_DESKTOP: "Stream on Desktop",
 };
 
-function makeBar(pct, len = 12) {
-    const filled = Math.round((pct / 100) * len);
-    return "█".repeat(filled) + "░".repeat(len - filled);
-}
+// ── Minimalist Embed Builders (No Emojis, No ASCII Art, No Embed Fields) ──────
 
-// ── Link Prompt Embed (When user needs to link first) ─────────────────────────
-function buildMustLinkFirstEmbed(actionName = "quest or badge commands") {
+/**
+ * Embed shown when an action requires linking an account first
+ */
+function buildMustLinkFirstEmbed(actionName = "this command") {
     return {
         embeds: [
             {
-                color: 0xfee75c,
-                author: { name: "QUEST CONTROL  /  ACCOUNT LINK REQUIRED" },
-                title: `${Emojis.LOCK} Account Link Required`,
+                color: COLOR_WARNING,
+                author: { name: "QUEST CONTROL / AUTHENTICATION" },
+                title: "Discord Account Link Required",
                 description: [
-                    `You haven't linked your Discord account yet!`,
-                    `To use ${actionName}, you must link your account first.`,
+                    `You have not linked your Discord user account yet.`,
+                    `To use ${actionName}, please link your account first.`,
                     "",
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                    `${Emojis.SPARKLE} **Why link your account?**`,
-                    `• Run commands with 1 click without ever typing your token again.`,
-                    `• 100% private: enter your token only inside the secure Discord modal.`,
-                    `• Never paste or leak your token in public server channels.`,
+                    "## Why Link Your Account?",
+                    "• Execute quest automation and badge spoofing with 1-click buttons.",
+                    "• Never paste or expose your token in chat or public channels.",
+                    "• Private modal entry ensures your credentials remain secure.",
                     "",
-                    `Click **Link Account** below to open the private pop-up modal.`,
+                    "Click **Link Account** below to open the private pop-up modal.",
                 ].join("\n"),
-                footer: { text: "QUEST CONTROL  •  Secure Modal Authentication" },
+                footer: { text: "Quest Control • Private Modal Authentication" },
                 timestamp: new Date().toISOString(),
             },
         ],
@@ -178,14 +174,12 @@ function buildMustLinkFirstEmbed(actionName = "quest or badge commands") {
                         style: ButtonStyle.Success,
                         custom_id: BTN_LINK,
                         label: "Link Account",
-                        emoji: buttonEmoji(Emojis.LINK),
                     },
                     {
                         type: ComponentType.Button,
                         style: ButtonStyle.Secondary,
                         custom_id: BTN_HELP,
                         label: "Help Guide",
-                        emoji: buttonEmoji(Emojis.HELP),
                     },
                 ],
             },
@@ -193,32 +187,34 @@ function buildMustLinkFirstEmbed(actionName = "quest or badge commands") {
     };
 }
 
-// ── Dashboard Embed (NO fields — formatted exclusively in description) ────────
+/**
+ * Main minimalist dashboard embed
+ */
 function buildTokenRequiredEmbed(hasLinkedToken = false) {
     const descLines = [
-        "### ✦ Quest & Badge Control Center",
-        "Everything you need, right here. Pick an action below to get started.",
+        "## Quest & Badge Control Center",
+        "Select an action below or browse the command reference.",
         "",
         hasLinkedToken
-            ? `${Emojis.ONLINE} **Discord account linked:** Ready to run commands!`
-            : `${Emojis.STANDBY} **No account linked:** Click **Link Account** to link via private modal!`,
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        `${Emojis.RUN} **Run Quests:** Auto-complete active quests with your saved account.`,
-        `${Emojis.STATUS} **Check Status:** See active quests, completion progress, rewards and time remaining.`,
-        `${Emojis.LINK} **Link Account:** Manage your saved token or update your account.`,
-        `${Emojis.HELP} **Command Guide:** View all available prefix and slash commands.`,
+            ? "**Account Status:** Linked and ready for automation."
+            : "**Account Status:** No linked account. Click Link Account below.",
         "",
-        `*Note: Tokens cannot be pasted in chat. Always use the private modal.*`,
+        "• **Quests:** Auto-complete active Discord quests with your saved account.",
+        "• **Status:** Check progress, remaining time, and eligible rewards.",
+        "• **Badges:** Simulate game playtime hours and live streaming telemetry.",
+        "• **Rich Presence:** Display custom game status for VALORANT, VS Code, and more.",
+        "",
+        "*Security Note: Tokens can only be submitted via private modal.*",
     ];
 
     return {
         embeds: [
             {
-                color: BRAND_COLOR,
-                author: { name: "QUEST CONTROL  /  DASHBOARD" },
-                title: `${Emojis.ORB} Your Quest & Badge Hub`,
+                color: COLOR_PRIMARY,
+                author: { name: "QUEST CONTROL / DASHBOARD" },
+                title: "Automation Hub",
                 description: descLines.join("\n"),
-                footer: { text: "QUEST CONTROL  •  Never post tokens publicly" },
+                footer: { text: "Quest Control • Minimalist Interface" },
                 timestamp: new Date().toISOString(),
             },
         ],
@@ -231,28 +227,30 @@ function buildTokenRequiredEmbed(hasLinkedToken = false) {
                         style: ButtonStyle.Primary,
                         custom_id: BTN_RUN,
                         label: "Run Quests",
-                        emoji: buttonEmoji(Emojis.RUN),
                     },
                     {
                         type: ComponentType.Button,
                         style: ButtonStyle.Secondary,
                         custom_id: BTN_STATUS,
                         label: "Check Status",
-                        emoji: buttonEmoji(Emojis.STATUS),
+                    },
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Secondary,
+                        custom_id: BTN_PRESENCE_MENU,
+                        label: "Rich Presence",
                     },
                     {
                         type: ComponentType.Button,
                         style: hasLinkedToken ? ButtonStyle.Secondary : ButtonStyle.Success,
                         custom_id: BTN_LINK,
                         label: hasLinkedToken ? "Linked Account" : "Link Account",
-                        emoji: buttonEmoji(Emojis.LINK),
                     },
                     {
                         type: ComponentType.Button,
                         style: ButtonStyle.Secondary,
                         custom_id: BTN_HELP,
-                        label: "Help",
-                        emoji: buttonEmoji(Emojis.HELP),
+                        label: "Help Guide",
                     },
                 ],
             },
@@ -260,40 +258,43 @@ function buildTokenRequiredEmbed(hasLinkedToken = false) {
     };
 }
 
-// ── Linked Account Embed (NO fields — formatted in description) ───────────────
+/**
+ * Embed displaying linked user account status
+ */
 function buildLinkEmbed(userRecord) {
     if (userRecord) {
-        const maskedToken = userRecord.token.length > 10
-            ? `${userRecord.token.slice(0, 6)}...${userRecord.token.slice(-4)}`
-            : "••••••••";
+        const maskedToken =
+            userRecord.token.length > 10
+                ? `${userRecord.token.slice(0, 6)}...${userRecord.token.slice(-4)}`
+                : "••••••••";
 
         const descLines = [
-            `### ${Emojis.CHECK} Discord Account Linked`,
-            "Your Discord account is saved in the local JSON database.",
-            "You do **not** need to type tokens into any commands!",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            `${Emojis.USER} **User:** ${userRecord.username || "Linked User"} (\`${userRecord.userId}\`)`,
-            `${Emojis.KEY} **Token:** \`${maskedToken}\``,
-            `${Emojis.NOTE} **Note:** ${userRecord.notes || "None"}`,
-            `${Emojis.CALENDAR} **Linked:** ${userRecord.linkedAt ? `<t:${Math.floor(new Date(userRecord.linkedAt).getTime() / 1000)}:R>` : "Recently"}`,
+            "## Discord Account Linked",
+            "Your user token is stored in the local secure JSON database.",
+            "You do not need to enter your token again.",
             "",
-            "**Token-Free Commands Available:**",
-            `• \`!quest run\` — auto-completes quests`,
-            `• \`!quest status\` — checks active quests & progress`,
-            `• \`!badge playtime [hours] [game]\` — boost game time badge`,
-            `• \`!badge stream [hours] [game]\` — boost streaming badge`,
-            `• \`!badge variety [count]\` — boost game variety badge`,
-            `• \`!badge all [hours]\` — boost both playtime & stream badges`,
+            `• **Account:** ${userRecord.username || "Linked User"} (\`${userRecord.userId}\`)`,
+            `• **Token:** \`${maskedToken}\``,
+            `• **Note:** ${userRecord.notes || "None"}`,
+            `• **Linked:** ${userRecord.linkedAt ? `<t:${Math.floor(new Date(userRecord.linkedAt).getTime() / 1000)}:R>` : "Recently"}`,
+            "",
+            "## Quick Actions Available",
+            "• `!quest run` — auto-complete available quests",
+            "• `!quest status` — check quest progress and rewards",
+            "• `!presence valorant` — set VALORANT rich presence",
+            "• `!presence vscode` — set Visual Studio Code rich presence",
+            "• `!badge playtime <hours>` — boost profile game playtime badge",
+            "• `!badge stream <hours>` — boost live streaming badge",
         ];
 
         return {
             embeds: [
                 {
-                    color: 0x57f287,
-                    author: { name: "QUEST CONTROL  /  ACCOUNT LINKED" },
-                    title: `${Emojis.ORB} Account Status`,
+                    color: COLOR_SUCCESS,
+                    author: { name: "QUEST CONTROL / ACCOUNT" },
+                    title: "Account Overview",
                     description: descLines.join("\n"),
-                    footer: { text: "QUEST CONTROL  •  Stored in local JSON database" },
+                    footer: { text: "Quest Control • Stored securely in JSON database" },
                     timestamp: new Date().toISOString(),
                 },
             ],
@@ -306,14 +307,18 @@ function buildLinkEmbed(userRecord) {
                             style: ButtonStyle.Primary,
                             custom_id: BTN_LINK,
                             label: "Update Token",
-                            emoji: buttonEmoji(Emojis.REFRESH),
+                        },
+                        {
+                            type: ComponentType.Button,
+                            style: ButtonStyle.Secondary,
+                            custom_id: BTN_PRESENCE_MENU,
+                            label: "Rich Presence",
                         },
                         {
                             type: ComponentType.Button,
                             style: ButtonStyle.Danger,
                             custom_id: BTN_LINK_UNLINK,
                             label: "Unlink Account",
-                            emoji: buttonEmoji(Emojis.UNLINK),
                         },
                     ],
                 },
@@ -322,28 +327,25 @@ function buildLinkEmbed(userRecord) {
     }
 
     const descLines = [
-        `### ${Emojis.LINK} Link Your Discord Token`,
-        "Link your Discord account token once to enable token-free commands!",
-        "Tokens must be submitted through the private modal only.",
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        `${Emojis.SPARKLE} **Why link your token?**`,
-        "• Never paste tokens into chat again.",
-        "• Run `!quest run` and `!quest status` directly.",
-        "• Run `!badge playtime`, `!badge stream`, and `!badge variety` with 1 click.",
-        "• Safe, private modal input with instant validation.",
+        "## Link Your Discord Account",
+        "Link your Discord account token once to enable token-free automation.",
+        "Tokens must be entered inside the private pop-up modal only.",
         "",
-        `${Emojis.SHIELD} **Privacy & Security:**`,
-        "Your token is encrypted in memory and stored in the bot's private JSON database. Modals are 100% private to you.",
+        "## Features for Linked Accounts",
+        "• Auto-complete Discord quests in background.",
+        "• Boost Discord profile game playtime and live streaming badges.",
+        "• Custom rich presence for VALORANT, Visual Studio Code, and Minecraft.",
+        "• Safe and private modal entry.",
     ];
 
     return {
         embeds: [
             {
-                color: 0x5865f2,
-                author: { name: "QUEST CONTROL  /  ACCOUNT LINKING" },
-                title: `${Emojis.ORB} Connect Your Account`,
+                color: COLOR_PRIMARY,
+                author: { name: "QUEST CONTROL / ACCOUNT LINKING" },
+                title: "Connect Account",
                 description: descLines.join("\n"),
-                footer: { text: "QUEST CONTROL  •  Private modal authentication" },
+                footer: { text: "Quest Control • Private modal authentication" },
                 timestamp: new Date().toISOString(),
             },
         ],
@@ -355,8 +357,7 @@ function buildLinkEmbed(userRecord) {
                         type: ComponentType.Button,
                         style: ButtonStyle.Primary,
                         custom_id: BTN_LINK,
-                        label: "Link Account",
-                        emoji: buttonEmoji(Emojis.LINK),
+                        label: "Open Link Modal",
                     },
                 ],
             },
@@ -364,158 +365,394 @@ function buildLinkEmbed(userRecord) {
     };
 }
 
-// ── Command Center Help Embed (NO fields — formatted in description) ──────────
-function buildHelpEmbed() {
+/**
+ * Rich Presence Management Embed
+ */
+function buildPresenceEmbed(userId, activePresence = null) {
+    const isPlaying = Boolean(activePresence);
     const descLines = [
-        `### ${Emojis.ORB} Command Center Reference`,
-        "Complete reference of all slash and prefix commands available in this bot.",
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        `**${Emojis.LINK} Account Linking (Token-Free Commands)**`,
-        "• `!link` — open private modal to link your token to the database",
-        "• `!unlink` — disconnect your token from the bot database",
-        "• `!whoami` or `!profile` — view your linked Discord account status",
+        "## Custom Rich Presence Manager",
+        "Spoof custom game and application presence on your linked Discord account.",
         "",
-        `**${Emojis.ROCKET} Slash Commands**`,
-        "• `/run-quests` — auto-complete quests *(requires linked account)*",
-        "• `/quest-status` — check quests & progress *(requires linked account)*",
-        "• `/spoof-playtime [hours] [game]` — simulate Game Time badge",
-        "• `/spoof-stream [hours] [game]` — simulate Streaming badge",
-        "• `/spoof-variety [games]` — simulate Game Variety badge",
-        "• `/link` — open private token linking modal",
-        "• `/quest-help` — open this command guide",
-        "• `/quest-ping` — check gateway & connectivity status",
+        isPlaying
+            ? `**Active Status:** Playing **${activePresence.presetName}** (\`${activePresence.presetKey}\`)\n• **Details:** ${activePresence.activity?.details || "None"}\n• **State:** ${activePresence.activity?.state || "Active"}\n• **Started:** <t:${Math.floor(activePresence.startedAt / 1000)}:R>`
+            : "**Active Status:** No custom presence currently active.",
         "",
-        `**${Emojis.DESKTOP} Prefix Commands (Quests & Status)**`,
-        "• `!quest run` — auto-complete quests using linked token",
-        "• `!quest status` — view quest progress using linked token",
-        "• `!quest` or `!quest panel` — show interactive button dashboard",
-        "• `!ping` or `!quest ping` — bot latency, memory & gateway status",
-        "• `!help` or `!quest help` — open this command guide",
+        "## Select a Game Preset Below",
+        "• **VALORANT:** Competitive match presence (`700136079562375258`)",
+        "• **Visual Studio Code:** Workspace and file editing status (`383226320970055681`)",
+        "• **Minecraft:** Survival multiplayer world (`432980957394370572`)",
+        "• **League of Legends:** Ranked match (`356869127241072640`)",
+        "• **Streaming:** Live Twitch/YouTube broadcast status",
         "",
-        `**${Emojis.GAME} Prefix Commands (Discord Profile Badges)**`,
-        "• `!badge playtime [hours] [game]` — boost Game Time badge",
-        "• `!badge stream [hours] [game]` — boost Streaming badge",
-        "• `!badge variety [games_count]` — boost Variety badge",
-        "• `!badge all [hours]` — boost both playtime & stream badges",
-        "• `!badge games` — list supported top games and application IDs",
-        "• `!badge help` — explain how science telemetry & badge sync work",
-        "",
-        `**${Emojis.CROWN} Owner Commands (OWNER_ID in .env)**`,
-        "• `!channel-set <quest/badges> <#channel or id>` — restrict commands to designated channel",
-        "• `!channel-set` — view configured channels for this server",
-        "• `!channel-set <quest/badges> reset` — remove channel lock restriction",
-        "• `!sync [guildId]` — force instant slash command registration",
-        "• `!stats` — bot uptime, RAM usage, gateway state & runners",
-        "• `!announce <quest_name> [details]` — DM registered quest recipients",
-        "• `!owner help` / `!owner eval <code>` — administrative evaluation",
-        "",
-        `**${Emojis.SHIELD} Safety & Security:**`,
-        "Tokens must be entered in the modal only. Messages containing tokens are deleted immediately.",
+        "*Use the dropdown or quick action buttons below to apply presence instantly.*",
     ];
 
     return {
         embeds: [
             {
-                color: BRAND_COLOR,
-                author: { name: "QUEST CONTROL  /  COMMAND GUIDE" },
-                title: `${Emojis.ORB} Command Center Reference`,
+                color: isPlaying ? COLOR_SUCCESS : COLOR_NEUTRAL,
+                author: { name: "QUEST CONTROL / RICH PRESENCE" },
+                title: "Custom Game Presence",
                 description: descLines.join("\n"),
-                footer: { text: "QUEST CONTROL  •  Prefix & Slash Commands" },
+                footer: { text: "Quest Control • Discord Gateway Opcode 3" },
                 timestamp: new Date().toISOString(),
+            },
+        ],
+        components: [
+            {
+                type: ComponentType.ActionRow,
+                components: [
+                    {
+                        type: ComponentType.StringSelect,
+                        custom_id: SELECT_PRESENCE_GAME,
+                        placeholder: "Choose a game or status preset...",
+                        options: [
+                            {
+                                label: "VALORANT",
+                                value: "valorant",
+                                description: "Competitive match - In Game",
+                            },
+                            {
+                                label: "Visual Studio Code",
+                                value: "vscode",
+                                description: "Editing workspace files",
+                            },
+                            {
+                                label: "Minecraft",
+                                value: "minecraft",
+                                description: "Survival Multiplayer Realm",
+                            },
+                            {
+                                label: "League of Legends",
+                                value: "league",
+                                description: "Summoner's Rift (Ranked)",
+                            },
+                            {
+                                label: "Twitch Stream",
+                                value: "stream",
+                                description: "Live broadcast status",
+                            },
+                            {
+                                label: "Clear Presence",
+                                value: "clear",
+                                description: "Turn off and restore regular presence",
+                            },
+                        ],
+                    },
+                ],
+            },
+            {
+                type: ComponentType.ActionRow,
+                components: [
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Primary,
+                        custom_id: BTN_PRESENCE_VALORANT,
+                        label: "VALORANT",
+                    },
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Primary,
+                        custom_id: BTN_PRESENCE_VSCODE,
+                        label: "VS Code",
+                    },
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Danger,
+                        custom_id: BTN_PRESENCE_CLEAR,
+                        label: "Turn Off Presence",
+                    },
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Secondary,
+                        custom_id: BTN_PRESENCE_MENU,
+                        label: "Refresh Status",
+                    },
+                ],
             },
         ],
     };
 }
 
-// ── Badge Spoofer Help Embed (NO fields — formatted in description) ───────────
-function buildBadgeHelpEmbed() {
-    const descLines = [
-        `### ${Emojis.GAME} Discord Badge Spoofer Guide`,
-        "This engine uses Discord's official telemetry pipeline to legitimately register game activity and streaming telemetry for profile badges.",
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        `**${Emojis.GAME} Game Time Badge:**`,
-        "Simulates continuous gameplay duration for detectable titles.",
-        "• `!badge playtime 100` — boosts 100 hours across top games",
-        "• `!badge playtime 150 valorant` — boosts 150 hours on VALORANT",
-        "",
-        `**${Emojis.STREAM} Streaming Badge:**`,
-        "Simulates live video screensharing telemetry (`video_stream_started`, `video_stream_ended`, `screenshare_finished`).",
-        "• `!badge stream 50` — logs 50 hours of stream telemetry",
-        "• `!badge stream 100 minecraft` — logs 100 stream hours for Minecraft",
-        "",
-        `**${Emojis.ACTIVITY} Game Variety Badge:**`,
-        "Simulates unique detectable game launches across Discord's catalog.",
-        "• `!badge variety 30` — simulates 30 unique games",
-        "",
-        `**${Emojis.FIRE} All Badges (Combined):**`,
-        "• `!badge all 100` — boosts both Playtime and Streaming badges together!",
-        "",
-        `**${Emojis.CLOCK} When do badges show up?**`,
-        "Discord evaluates profile badge telemetry in asynchronous backend batches. Badges appear on your Discord profile within **24 to 48 hours**.",
-    ];
+/**
+ * Interactive Help Embed using String Select Menu
+ */
+function buildHelpEmbed(category = "help_overview") {
+    let title = "Command Center";
+    let descLines = [];
+
+    switch (category) {
+        case "help_quests":
+            title = "Quest Automation Guide";
+            descLines = [
+                "## Quest Automation",
+                "Automatically complete Discord quests for in-game rewards, avatar items, and orbs.",
+                "",
+                "• `/run-quests` — execute auto-completion for all active quests",
+                "• `/quest-status` — inspect quest progress, target minutes, and rewards",
+                "• `!quest run` — prefix command to auto-complete quests",
+                "• `!quest status` — prefix command to check status",
+                "• `!quest panel` — open the interactive button dashboard",
+                "",
+                "## Supported Quest Types",
+                "• Desktop Playtime (15 min)",
+                "• Mobile Video Quests",
+                "• Discord Activities & Games",
+                "• Desktop Screen Sharing & Streaming",
+            ];
+            break;
+
+        case "help_badges":
+            title = "Discord Badges & Telemetry";
+            descLines = [
+                "## Profile Badges & Science Telemetry",
+                "Simulate legitimate Discord client telemetry to qualify for profile badges.",
+                "",
+                "• `!badge playtime <hours> [game]` — boost game playtime badge",
+                "• `!badge stream <hours> [game]` — boost live streaming badge",
+                "• `!badge variety <count>` — simulate up to 50 distinct games",
+                "• `!badge all <hours>` — boost both playtime and streaming badges",
+                "• `!badge games` — list supported detectable games and IDs",
+                "• `/spoof-playtime` / `/spoof-stream` / `/spoof-variety` — slash commands",
+                "",
+                "## Profile Sync Time",
+                "Discord processes badge telemetry asynchronously in backend batches.",
+                "Badges typically reflect on your Discord profile within 24 to 48 hours.",
+            ];
+            break;
+
+        case "help_presence":
+            title = "Custom Rich Presence";
+            descLines = [
+                "## Game Rich Presence Spoofing",
+                "Display rich presence for verified detectable games directly on your user account.",
+                "",
+                "• `/presence game preset:valorant` — set VALORANT playing status",
+                "• `/presence game preset:vscode` — set Visual Studio Code status",
+                "• `/presence stream` — set Twitch streaming status",
+                "• `/presence status` — inspect current active presence session",
+                "• `/presence clear` — turn off rich presence",
+                "• `!presence` — open the interactive presence control panel",
+                "• `!presence valorant` / `!presence vscode` / `!presence clear`",
+            ];
+            break;
+
+        case "help_account":
+            title = "Account Management & Security";
+            descLines = [
+                "## Account Management",
+                "Manage your linked Discord account token and security credentials.",
+                "",
+                "• `!link` or `/link` — open private modal to link your token",
+                "• `!unlink` or `/unlink` — remove your token from the bot database",
+                "• `!whoami` or `/whoami` — inspect linked account details",
+                "",
+                "## Token Safety",
+                "• Plain text tokens typed in chat are deleted automatically.",
+                "• All tokens must be submitted through private Discord modals.",
+                "• Credentials are stored locally in the bot's private JSON database.",
+            ];
+            break;
+
+        case "help_admin":
+            title = "Server Administration";
+            descLines = [
+                "## Server Administration",
+                "Configure bot channels and announcement broadcasts for your server.",
+                "",
+                "• `!channel-set quest <#channel>` — lock quest commands to channel",
+                "• `!channel-set badges <#channel>` — lock badge commands to channel",
+                "• `!channel-set <quest/badges> reset` — clear channel restriction",
+                "• `!channel-set` — view current server channel configuration",
+                "• `!sync [guildId]` — register instant slash commands",
+                "• `!stats` — view bot uptime, memory usage, and gateway status",
+                "• `!announce <quest_name> [details]` — broadcast DM notification to registered members",
+            ];
+            break;
+
+        case "help_overview":
+        default:
+            title = "Command Center Overview";
+            descLines = [
+                "## Getting Started",
+                "Welcome to Quest Control. This bot automates Discord Quests, profile badges, and rich presence.",
+                "",
+                "## Step 1: Link Your Account",
+                "Click **Link Account** below to enter your user token in a private modal.",
+                "",
+                "## Step 2: Use Token-Free Commands",
+                "Once linked, execute any command or click interactive buttons with 1 click.",
+                "",
+                "## Browse Help Categories",
+                "Use the select menu below to view specific command guides:",
+                "• Quest Automation",
+                "• Discord Badges & Telemetry",
+                "• Custom Rich Presence",
+                "• Account & Security",
+                "• Server Administration",
+            ];
+            break;
+    }
 
     return {
         embeds: [
             {
-                color: EMBED_COLOR,
-                author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
-                title: `${Emojis.ORB} Discord Badge Spoofer Guide`,
+                color: COLOR_NEUTRAL,
+                author: { name: "QUEST CONTROL / COMMAND REFERENCE" },
+                title,
                 description: descLines.join("\n"),
-                footer: { text: "QUEST CONTROL  •  Discord Science Telemetry" },
+                footer: { text: "Quest Control • Clean Minimalist UI" },
                 timestamp: new Date().toISOString(),
+            },
+        ],
+        components: [
+            {
+                type: ComponentType.ActionRow,
+                components: [
+                    {
+                        type: ComponentType.StringSelect,
+                        custom_id: SELECT_HELP_CATEGORY,
+                        placeholder: "Select a help topic to view...",
+                        options: [
+                            {
+                                label: "Overview & Getting Started",
+                                value: "help_overview",
+                                description: "Quick start and account linking guide",
+                                default: category === "help_overview",
+                            },
+                            {
+                                label: "Quest Automation",
+                                value: "help_quests",
+                                description: "Completing desktop, mobile, and stream quests",
+                                default: category === "help_quests",
+                            },
+                            {
+                                label: "Discord Badges & Spoofing",
+                                value: "help_badges",
+                                description: "Game playtime and live streaming telemetry",
+                                default: category === "help_badges",
+                            },
+                            {
+                                label: "Custom Rich Presence",
+                                value: "help_presence",
+                                description: "VALORANT, VS Code, and game status spoofing",
+                                default: category === "help_presence",
+                            },
+                            {
+                                label: "Account Management",
+                                value: "help_account",
+                                description: "Token linking, status check, and unlinking",
+                                default: category === "help_account",
+                            },
+                            {
+                                label: "Server Administration",
+                                value: "help_admin",
+                                description: "Channel locks and announcement notifications",
+                                default: category === "help_admin",
+                            },
+                        ],
+                    },
+                ],
+            },
+            {
+                type: ComponentType.ActionRow,
+                components: [
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Success,
+                        custom_id: BTN_LINK,
+                        label: "Link Account",
+                    },
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Primary,
+                        custom_id: BTN_RUN,
+                        label: "Run Quests",
+                    },
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Secondary,
+                        custom_id: BTN_STATUS,
+                        label: "Check Status",
+                    },
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Secondary,
+                        custom_id: BTN_PRESENCE_MENU,
+                        label: "Rich Presence",
+                    },
+                ],
             },
         ],
     };
 }
 
+/**
+ * Detectable games catalog embed
+ */
 function buildBadgeGamesEmbed() {
-    const list = POPULAR_GAMES.slice(0, 25)
-        .map((g, i) => `**${i + 1}.** ${g.name} — \`${g.id}\``)
+    const list = POPULAR_GAMES.slice(0, 20)
+        .map((g, i) => `• **${i + 1}. ${g.name}** — \`${g.id}\``)
         .join("\n");
-    return {
-        embeds: [
-            {
-                color: EMBED_COLOR,
-                author: { name: "QUEST CONTROL  /  DETECTABLE GAMES" },
-                title: `${Emojis.GAME} Supported Detectable Games`,
-                description: `Discord tracks game badges for verified games in their catalog. Here are the top games available for spoofing:\n\n${list}\n\n*...and more in Discord's catalog.*`,
-                footer: { text: "QUEST CONTROL  •  Use !badge playtime <hours> [game]" },
-                timestamp: new Date().toISOString(),
-            },
-        ],
-    };
-}
 
-function buildPingEmbed() {
     return {
         embeds: [
             {
-                color: EMBED_COLOR,
-                author: { name: "QUEST CONTROL  /  SYSTEM" },
-                title: `${Emojis.ORB} All Systems Online`,
+                color: COLOR_NEUTRAL,
+                author: { name: "QUEST CONTROL / DETECTABLE GAMES" },
+                title: "Supported Detectable Games",
                 description: [
-                    "The bot is connected and ready to receive commands.",
+                    "Discord tracks profile badges for verified detectable games. Here are the top titles supported for spoofing:",
                     "",
-                    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                    `${Emojis.ONLINE} **Status:** Operational`,
-                    `${Emojis.HELP} **Commands:** Use \`/quest-help\` or \`!help\` to begin`,
+                    list,
+                    "",
+                    "*Use `!badge playtime <hours> [game]` to boost playtime.*",
                 ].join("\n"),
-                footer: { text: "QUEST CONTROL  •  System status" },
+                footer: { text: "Quest Control • Discord Detectable Catalog" },
                 timestamp: new Date().toISOString(),
             },
         ],
     };
 }
 
+/**
+ * Ping / System status embed
+ */
+function buildPingEmbed(latency = 0) {
+    return {
+        embeds: [
+            {
+                color: COLOR_NEUTRAL,
+                author: { name: "QUEST CONTROL / SYSTEM" },
+                title: "System Operational",
+                description: [
+                    "All services and gateway connections are online.",
+                    "",
+                    `• **Gateway Status:** ${isBotConnected ? "Online" : "Standby"}`,
+                    `• **API Latency:** ${latency}ms`,
+                    `• **Bot Uptime:** ${Math.floor(process.uptime() / 60)} minutes`,
+                    `• **HTTP Port:** ${HTTP_PORT}`,
+                ].join("\n"),
+                footer: { text: "Quest Control • System Diagnostics" },
+                timestamp: new Date().toISOString(),
+            },
+        ],
+    };
+}
+
+/**
+ * Quest completion announcement embed
+ */
 function buildQuestAnnouncementEmbed(questName, details) {
     return {
-        color: EMBED_COLOR,
-        author: { name: "QUEST CONTROL  /  NEW QUEST" },
-        title: `${Emojis.ORB} New quest: ${questName}`,
+        color: COLOR_PRIMARY,
+        author: { name: "QUEST CONTROL / NEW QUEST" },
+        title: `New Quest Available: ${questName}`,
         description:
-            "A new Discord Quest is available." +
+            "A new Discord Quest is available to complete." +
             (details ? `\n\n${details}` : ""),
-        footer: { text: "QUEST CONTROL  •  Quest notifications" },
+        footer: { text: "Quest Control • Quest Notifications" },
         timestamp: new Date().toISOString(),
     };
 }
@@ -541,7 +778,9 @@ async function sendQuestAnnouncement(userId, questName, details) {
     });
 }
 
-// ── Private Modal Builder (Modal-Only Submission) ─────────────────────────────
+/**
+ * Private Modal Builder for Discord user token entry
+ */
 function buildLinkModal() {
     return {
         title: "Link Discord Account Token",
@@ -569,7 +808,7 @@ function buildLinkModal() {
                         style: TextInputStyle.Short,
                         custom_id: INPUT_LINK_NOTE,
                         label: "Account Nickname / Note (Optional)",
-                        placeholder: "e.g. Main Account or Secondary",
+                        placeholder: "e.g. Main Account",
                         required: false,
                         max_length: 50,
                     },
@@ -579,7 +818,9 @@ function buildLinkModal() {
     };
 }
 
-// ── Quest Complete Embed (NO fields — formatted in description) ───────────────
+/**
+ * Embed for completed quest
+ */
 function buildCompleteEmbed(quest) {
     const cfg = quest.config;
     const questName = cfg.messages.quest_name;
@@ -591,7 +832,7 @@ function buildCompleteEmbed(quest) {
     const taskLines = Object.entries(tasks)
         .map(
             ([k, v]) =>
-                `${TASK_LABELS[k] ?? k} • ${Math.ceil((v?.target ?? 0) / 60)} min ${Emojis.CHECK}`,
+                `• ${TASK_LABELS[k] ?? k}: ${Math.ceil((v?.target ?? 0) / 60)} min (Completed)`,
         )
         .join("\n");
 
@@ -606,7 +847,7 @@ function buildCompleteEmbed(quest) {
     const rewardLines = rewards
         .map((r) =>
             r.orb_quantity
-                ? `${r.orb_quantity} Orbs ${Emojis.ORB} (${r.messages?.name ?? ""})`
+                ? `${r.orb_quantity} Orbs (${r.messages?.name ?? ""})`
                 : (r.messages?.name ?? ""),
         )
         .join("\n");
@@ -619,43 +860,44 @@ function buildCompleteEmbed(quest) {
         : undefined;
 
     const descLines = [
-        `**${questName}**`,
+        `## ${questName}`,
         `*${gameTitle} • ${publisher}*`,
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        `**${Emojis.STATUS} Task:**\n${taskLines || "Unknown"}`,
         "",
-        `**${Emojis.STATS} Progress:** \`${makeBar(100)}\` 100% — Done!`,
-        `**${Emojis.CALENDAR} Expires:** <t:${expiresUnix}:R> (${daysLeft}d left)`,
+        "**Task Requirements:**",
+        taskLines || "• Standard task completion",
+        "",
+        `• **Progress:** 100% (Completed)`,
+        `• **Expires:** <t:${expiresUnix}:R> (${daysLeft}d remaining)`,
     ];
     if (rewardLines) {
-        descLines.push(`**${Emojis.GIFT} Reward:** ${rewardLines}`);
+        descLines.push(`• **Reward:** ${rewardLines}`);
     }
 
     const embed = {
-        color: EMBED_COLOR,
-        author: { name: "QUEST CONTROL  /  COMPLETION" },
-        title: `${Emojis.CHECK} Quest Complete!`,
+        color: COLOR_SUCCESS,
+        author: { name: "QUEST CONTROL / COMPLETION" },
+        title: "Quest Completed Successfully",
         description: descLines.join("\n"),
-        footer: { text: "QUEST CONTROL  •  Completion report" },
+        footer: { text: "Quest Control • Completion Report" },
         timestamp: new Date().toISOString(),
     };
     if (thumbnail) embed.thumbnail = thumbnail;
     return embed;
 }
 
-// ── Quest Status Embed (NO fields — formatted in description) ─────────────────
+/**
+ * Embed for live quest status
+ */
 function buildStatusEmbed(info) {
     const taskLabel = TASK_LABELS[info.taskName] ?? info.taskName;
     const targetMins = Math.ceil(info.targetSeconds / 60);
     const doneMins = Math.ceil(info.doneSeconds / 60);
-    const bar = makeBar(info.progressPct);
     const expiresUnix = Math.floor(info.expiresAt.getTime() / 1000);
     const daysLeft = Math.max(
         0,
         Math.ceil((info.expiresAt.getTime() - Date.now()) / 86_400_000),
     );
 
-    const statusIcon = info.isCompleted ? Emojis.SUCCESS : info.isEnrolled ? Emojis.REFRESH : Emojis.STAR;
     const statusText = info.isCompleted
         ? "Completed"
         : info.isEnrolled
@@ -663,7 +905,7 @@ function buildStatusEmbed(info) {
           : "Not Enrolled";
 
     const rewardText = info.orbQuantity
-        ? `${info.orbQuantity} Orbs ${Emojis.ORB} (${info.rewardName})`
+        ? `${info.orbQuantity} Orbs (${info.rewardName})`
         : info.rewardName;
 
     const thumbnail = info.gameTileAsset
@@ -673,51 +915,48 @@ function buildStatusEmbed(info) {
         : undefined;
 
     const descLines = [
+        `## ${info.name}`,
         `*${info.gameTitle} • ${info.publisher}*`,
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        `**${Emojis.STATUS} Task:** ${taskLabel} • ${targetMins} min`,
-        `**${Emojis.STATS} Progress:** \`${bar}\` ${info.progressPct}% (${doneMins}/${targetMins} min) — ${statusText}`,
-        `**${Emojis.CALENDAR} Expires:** <t:${expiresUnix}:R> (${daysLeft}d left)`,
-        `**${Emojis.GIFT} Reward:** ${rewardText}`,
+        "",
+        `• **Task:** ${taskLabel} (${targetMins} min)`,
+        `• **Progress:** ${info.progressPct}% (${doneMins}/${targetMins} min) — ${statusText}`,
+        `• **Expires:** <t:${expiresUnix}:R> (${daysLeft}d left)`,
+        `• **Reward:** ${rewardText}`,
     ];
 
     const embed = {
-        color: EMBED_COLOR,
-        author: { name: "QUEST CONTROL  /  STATUS" },
-        title: `${statusIcon} ${info.name}`,
+        color: info.isCompleted ? COLOR_SUCCESS : COLOR_NEUTRAL,
+        author: { name: "QUEST CONTROL / STATUS" },
+        title: info.name,
         description: descLines.join("\n"),
-        footer: { text: "QUEST CONTROL  •  Live status" },
+        footer: { text: "Quest Control • Live Quest Status" },
         timestamp: new Date().toISOString(),
     };
     if (thumbnail) embed.thumbnail = thumbnail;
     return embed;
 }
 
-// ── Format error messages ─────────────────────────────────────────────────────
 function formatError(err) {
     const blockedMatch = err.match(/blocked until (.+?)\.?$/i);
     if (blockedMatch) {
         const unixTs = Math.floor(new Date(blockedMatch[1]).getTime() / 1000);
         if (!isNaN(unixTs)) {
-            return `${Emojis.WARNING} **Quest enrollment blocked!**\nDiscord temporarily blocked enrollment until: <t:${unixTs}:F> (<t:${unixTs}:R>)`;
+            return `**Quest enrollment temporarily blocked by Discord until:** <t:${unixTs}:F> (<t:${unixTs}:R>)`;
         }
     }
     if (
         /401|unauthorized/i.test(err) ||
         /invalid.*token|token.*invalid/i.test(err)
     ) {
-        return [
-            `${Emojis.KEY} **Invalid or expired token!**`,
-            "The token is incorrect or has expired. Please use `!link` to update your token.",
-        ].join("\n");
+        return "**Invalid or expired token.** Please use `!link` or `/link` to update your token.";
     }
     if (/token is required/i.test(err)) {
-        return `${Emojis.ERROR} **Token required!** Please link your account first using \`!link\`.`;
+        return "**Token required.** Please link your account first using `!link`.";
     }
     if (/rate.?limit/i.test(err)) {
-        return `${Emojis.TIME} **Rate limited!** Discord returned rate limits. Please try again in a few minutes.`;
+        return "**Rate limited by Discord.** Please wait a few moments and try again.";
     }
-    return `${Emojis.ERROR} **Error:** \`${err}\``;
+    return `**Error:** \`${err}\``;
 }
 
 async function sendQuestEmbed(channelId, quest) {
@@ -734,7 +973,7 @@ async function sendStatusEmbeds(channelId, token, mentionUser) {
     const working = await rest
         .post(`/channels/${channelId}/messages`, {
             body: {
-                content: `${mentionUser ? `<@${mentionUser}> ` : ""}${Emojis.CLOCK} Fetching quest status...`,
+                content: `${mentionUser ? `<@${mentionUser}> ` : ""}Fetching quest status...`,
             },
         })
         .catch(() => null);
@@ -762,7 +1001,7 @@ async function sendStatusEmbeds(channelId, token, mentionUser) {
         await rest
             .post(`/channels/${channelId}/messages`, {
                 body: {
-                    content: `${mentionUser ? `<@${mentionUser}> ` : ""}${Emojis.SLEEP} No active quests found!`,
+                    content: `${mentionUser ? `<@${mentionUser}> ` : ""}No active quests found.`,
                 },
             })
             .catch(() => {});
@@ -772,7 +1011,7 @@ async function sendStatusEmbeds(channelId, token, mentionUser) {
     await rest
         .post(`/channels/${channelId}/messages`, {
             body: {
-                content: `${mentionUser ? `<@${mentionUser}> ` : ""}${Emojis.STATUS} **Found ${quests.length} quest(s):**`,
+                content: `${mentionUser ? `<@${mentionUser}> ` : ""}**Active Quests (${quests.length}):**`,
             },
         })
         .catch(() => {});
@@ -879,6 +1118,54 @@ async function registerCommands(targetGuildId, customBotToken, customClientId) {
             ],
         },
         {
+            name: "presence",
+            description: "Manage custom rich presence for VALORANT, VS Code, and more",
+            options: [
+                {
+                    name: "game",
+                    description: "Set game rich presence",
+                    type: ApplicationCommandOptionType.Subcommand,
+                    options: [
+                        {
+                            name: "preset",
+                            description: "Game preset to spoof",
+                            type: ApplicationCommandOptionType.String,
+                            required: true,
+                            choices: [
+                                { name: "VALORANT", value: "valorant" },
+                                { name: "Visual Studio Code", value: "vscode" },
+                                { name: "Minecraft", value: "minecraft" },
+                                { name: "League of Legends", value: "league" },
+                                { name: "Twitch Stream", value: "stream" },
+                            ],
+                        },
+                        {
+                            name: "details",
+                            description: "Custom details line",
+                            type: ApplicationCommandOptionType.String,
+                            required: false,
+                        },
+                        {
+                            name: "state",
+                            description: "Custom state line",
+                            type: ApplicationCommandOptionType.String,
+                            required: false,
+                        },
+                    ],
+                },
+                {
+                    name: "status",
+                    description: "View current rich presence status",
+                    type: ApplicationCommandOptionType.Subcommand,
+                },
+                {
+                    name: "clear",
+                    description: "Turn off custom rich presence",
+                    type: ApplicationCommandOptionType.Subcommand,
+                },
+            ],
+        },
+        {
             name: "quest-help",
             description: "Open the Quest & Badge command center guide",
         },
@@ -941,11 +1228,6 @@ async function registerCommands(targetGuildId, customBotToken, customClientId) {
                     description: "Check whether new quest announcement DMs are enabled",
                     type: ApplicationCommandOptionType.Subcommand,
                 },
-                {
-                    name: "test",
-                    description: "Send yourself a test quest notification",
-                    type: ApplicationCommandOptionType.Subcommand,
-                },
             ],
         },
         {
@@ -980,7 +1262,7 @@ async function registerCommands(targetGuildId, customBotToken, customClientId) {
         throw err;
     }
 
-    const guildId = targetGuildId || process.env.GUILD_ID;
+    const guildId = targetGuildId || config.guildId;
     if (guildId) {
         try {
             await restClient.put(`/applications/${clientId}/guilds/${guildId}/commands`, { body: commands });
@@ -1010,9 +1292,9 @@ async function runAndReport(userToken, channelId, sendInitial, editFinal) {
     if (result.error) {
         content = formatError(result.error);
     } else if (result.questsFound === 0) {
-        content = `${Emojis.SLEEP} No active quests available to complete right now!`;
+        content = "No active quests available to complete right now.";
     } else {
-        content = `${Emojis.SUCCESS} **${result.questsFound}** quest(s) found — **${result.questsCompleted}** completed!`;
+        content = `Found **${result.questsFound}** quest(s) — **${result.questsCompleted}** completed successfully!`;
     }
 
     await editFinal(content.slice(0, 2000));
@@ -1027,7 +1309,7 @@ function checkCooldown(userId) {
     if (activeUsers.has(userId)) {
         return {
             blocked: true,
-            reason: `${Emojis.TIME} Your quest or badge run is already in progress, please wait!`,
+            reason: "Your quest or badge task is already in progress, please wait for it to finish.",
         };
     }
     const last = lastRunAt.get(userId);
@@ -1037,7 +1319,7 @@ function checkCooldown(userId) {
             const left = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
             return {
                 blocked: true,
-                reason: `${Emojis.TIME} Cooldown active! Please wait **${left}s** before running again.`,
+                reason: `Cooldown active. Please wait **${left}s** before running again.`,
             };
         }
     }
@@ -1068,10 +1350,10 @@ function initBotListeners(client, gateway) {
         await registerCommands().catch((e) =>
             console.error("Failed to register commands:", e.message),
         );
-        console.log(`Prefix command: "${PREFIX}" → ready with modal token linking`);
+        console.log(`Prefix: "${PREFIX}" | Minimalist Components V2 ready`);
     });
 
-    // ── Interactions (slash commands + buttons + modals) ──────────────────────
+    // ── Interactions (Slash, Select Menus, Buttons, Modals) ───────────────────
     client.on(
         GatewayDispatchEvents.InteractionCreate,
         async ({ data: interaction, api }) => {
@@ -1081,7 +1363,7 @@ function initBotListeners(client, gateway) {
             const customId = interaction.data?.custom_id;
             const userIsOwner = isOwner(userId);
 
-            // ── Category Channel Access Control for Interactions ──────────────────
+            // Channel Access Control for Interactions
             const questInteraction =
                 (interaction.type === InteractionType.MessageComponent &&
                     [BTN_RUN, BTN_STATUS].includes(customId ?? "")) ||
@@ -1093,11 +1375,11 @@ function initBotListeners(client, gateway) {
                 if (notice) {
                     await api.interactions.reply(interaction.id, interaction.token, {
                         embeds: [{
-                            color: EMBED_COLOR,
-                            author: { name: "QUEST CONTROL  /  ACCESS" },
-                            title: `${Emojis.ORB} Quest Channel Only`,
+                            color: COLOR_NEUTRAL,
+                            author: { name: "QUEST CONTROL / ACCESS" },
+                            title: "Quest Channel Restriction",
                             description: notice,
-                            footer: { text: "QUEST CONTROL  •  Channel restriction" },
+                            footer: { text: "Quest Control • Channel lock active" },
                         }],
                         flags: 64,
                     });
@@ -1106,28 +1388,61 @@ function initBotListeners(client, gateway) {
                 rememberQuestUser(guildId, userId);
             }
 
-            const badgeInteraction =
-                interaction.type === InteractionType.ApplicationCommand &&
-                ["spoof-playtime", "spoof-stream", "spoof-variety"].includes(interaction.data?.name);
-
-            if (badgeInteraction && !userIsOwner) {
-                const notice = checkCategoryNotice(categoryChannels, guildId, channelId, "badges");
-                if (notice) {
+            // ── String Select Menus ───────────────────────────────────────────
+            if (
+                interaction.type === InteractionType.MessageComponent &&
+                interaction.data?.component_type === ComponentType.StringSelect
+            ) {
+                // Help category dropdown
+                if (customId === SELECT_HELP_CATEGORY) {
+                    const selectedCategory = interaction.data?.values?.[0] || "help_overview";
+                    const helpPayload = buildHelpEmbed(selectedCategory);
                     await api.interactions.reply(interaction.id, interaction.token, {
-                        embeds: [{
-                            color: EMBED_COLOR,
-                            author: { name: "QUEST CONTROL  /  ACCESS" },
-                            title: `${Emojis.ORB} Badge Channel Only`,
-                            description: notice,
-                            footer: { text: "QUEST CONTROL  •  Channel restriction" },
-                        }],
-                        flags: 64,
+                        type: InteractionResponseType.UpdateMessage,
+                        ...helpPayload,
                     });
+                    return;
+                }
+
+                // Presence game preset dropdown
+                if (customId === SELECT_PRESENCE_GAME) {
+                    const selectedPreset = interaction.data?.values?.[0] || "valorant";
+                    const token = getUserToken(userId);
+                    if (!token) {
+                        await api.interactions.reply(interaction.id, interaction.token, {
+                            ...buildMustLinkFirstEmbed("rich presence spoofing"),
+                            flags: 64,
+                        });
+                        return;
+                    }
+
+                    if (selectedPreset === "clear") {
+                        clearUserPresence(userId);
+                        const presencePayload = buildPresenceEmbed(userId, null);
+                        await api.interactions.reply(interaction.id, interaction.token, {
+                            type: InteractionResponseType.UpdateMessage,
+                            ...presencePayload,
+                        });
+                        return;
+                    }
+
+                    await api.interactions.defer(interaction.id, interaction.token, { flags: 64 });
+                    try {
+                        await setUserPresence(userId, token, selectedPreset);
+                        const current = getUserPresence(userId);
+                        await api.interactions.editReply(CLIENT_ID, interaction.token, {
+                            ...buildPresenceEmbed(userId, current),
+                        });
+                    } catch (err) {
+                        await api.interactions.editReply(CLIENT_ID, interaction.token, {
+                            content: `Failed to set rich presence: ${err.message}`,
+                        });
+                    }
                     return;
                 }
             }
 
-            // ── Button clicks ─────────────────────────────────────────────────────
+            // ── Button Clicks ─────────────────────────────────────────────────
             if (interaction.type === InteractionType.MessageComponent) {
                 if (customId === BTN_LINK) {
                     await api.interactions.createModal(
@@ -1148,11 +1463,63 @@ function initBotListeners(client, gateway) {
                 }
 
                 if (customId === BTN_LINK_UNLINK) {
+                    clearUserPresence(userId);
                     const removed = removeUserToken(userId);
                     await api.interactions.reply(interaction.id, interaction.token, {
                         content: removed
-                            ? `${Emojis.SUCCESS} Your linked Discord token has been removed from the database.`
-                            : `${Emojis.INFO} You do not have any linked token in the database.`,
+                            ? "Your linked Discord token has been removed from the database and active presence stopped."
+                            : "You do not have any linked token in the database.",
+                        flags: 64,
+                    });
+                    return;
+                }
+
+                if (customId === BTN_PRESENCE_MENU) {
+                    const rec = getUserRecord(userId);
+                    if (!rec) {
+                        await api.interactions.reply(interaction.id, interaction.token, {
+                            ...buildMustLinkFirstEmbed("custom rich presence"),
+                            flags: 64,
+                        });
+                        return;
+                    }
+                    const activePres = getUserPresence(userId);
+                    await api.interactions.reply(interaction.id, interaction.token, {
+                        ...buildPresenceEmbed(userId, activePres),
+                        flags: 64,
+                    });
+                    return;
+                }
+
+                if (customId === BTN_PRESENCE_VALORANT || customId === BTN_PRESENCE_VSCODE) {
+                    const token = getUserToken(userId);
+                    if (!token) {
+                        await api.interactions.reply(interaction.id, interaction.token, {
+                            ...buildMustLinkFirstEmbed("custom rich presence"),
+                            flags: 64,
+                        });
+                        return;
+                    }
+                    const preset = customId === BTN_PRESENCE_VALORANT ? "valorant" : "vscode";
+                    await api.interactions.defer(interaction.id, interaction.token, { flags: 64 });
+                    try {
+                        await setUserPresence(userId, token, preset);
+                        const current = getUserPresence(userId);
+                        await api.interactions.editReply(CLIENT_ID, interaction.token, {
+                            ...buildPresenceEmbed(userId, current),
+                        });
+                    } catch (err) {
+                        await api.interactions.editReply(CLIENT_ID, interaction.token, {
+                            content: `Failed to set presence: ${err.message}`,
+                        });
+                    }
+                    return;
+                }
+
+                if (customId === BTN_PRESENCE_CLEAR) {
+                    clearUserPresence(userId);
+                    await api.interactions.reply(interaction.id, interaction.token, {
+                        ...buildPresenceEmbed(userId, null),
                         flags: 64,
                     });
                     return;
@@ -1180,12 +1547,11 @@ function initBotListeners(client, gateway) {
                     await api.interactions.defer(interaction.id, interaction.token, { flags: 64 });
                     const sendInitial = async () =>
                         api.interactions.editReply(CLIENT_ID, interaction.token, {
-                            content: `${Emojis.CLOCK} Quest processing has started...`,
+                            content: "Quest processing has started...",
                         });
                     const editFinal = async (c) =>
                         void (await api.interactions.editReply(CLIENT_ID, interaction.token, { content: c }));
 
-                    console.log(`[Button run - linked token] started (user: ${userId})`);
                     startRun(userId);
                     try {
                         await runAndReport(linkedToken, channelId, sendInitial, editFinal);
@@ -1206,17 +1572,16 @@ function initBotListeners(client, gateway) {
                     }
 
                     await api.interactions.defer(interaction.id, interaction.token, { flags: 64 });
-                    console.log(`[Button status - linked token] started (user: ${userId})`);
                     await sendStatusEmbeds(channelId, linkedToken);
                     await api.interactions.editReply(CLIENT_ID, interaction.token, {
-                        content: `${Emojis.STATUS} Quest status embeds sent above!`,
+                        content: "Quest status report sent above.",
                     });
                     return;
                 }
 
                 if (customId === BTN_HELP) {
                     await api.interactions.reply(interaction.id, interaction.token, {
-                        ...buildHelpEmbed(),
+                        ...buildHelpEmbed("help_overview"),
                         flags: 64,
                     });
                     return;
@@ -1224,7 +1589,7 @@ function initBotListeners(client, gateway) {
                 return;
             }
 
-            // ── Modal Submits ─────────────────────────────────────────────────────
+            // ── Modal Submits ─────────────────────────────────────────────────
             if (interaction.type === InteractionType.ModalSubmit) {
                 if (customId === MODAL_LINK) {
                     const rows = interaction.data?.components || [];
@@ -1243,7 +1608,7 @@ function initBotListeners(client, gateway) {
 
                     if (!submittedToken || submittedToken.length < 15) {
                         await api.interactions.reply(interaction.id, interaction.token, {
-                            content: `${Emojis.ERROR} Invalid Discord token format. Please check your token and try again.`,
+                            content: "Invalid Discord token format. Please check your token and try again.",
                             flags: 64,
                         });
                         return;
@@ -1253,7 +1618,7 @@ function initBotListeners(client, gateway) {
                     const verify = await verifyAndFetchDiscordUser(submittedToken);
                     if (!verify.valid) {
                         await api.interactions.editReply(CLIENT_ID, interaction.token, {
-                            content: `${Emojis.ERROR} **Failed to verify Discord token:** ${verify.error || "Invalid user credentials"}. Make sure you copied your full user token.`,
+                            content: `Failed to verify Discord token: ${verify.error || "Invalid user credentials"}. Make sure you copied your full user token.`,
                         });
                         return;
                     }
@@ -1275,7 +1640,7 @@ function initBotListeners(client, gateway) {
                 return;
             }
 
-            // ── Slash commands ────────────────────────────────────────────────────
+            // ── Slash Commands ────────────────────────────────────────────────
             if (interaction.type !== InteractionType.ApplicationCommand) return;
             const cmdData = interaction.data;
             if (cmdData?.type !== ApplicationCommandType.ChatInput) return;
@@ -1320,7 +1685,7 @@ function initBotListeners(client, gateway) {
                         try {
                             await sendQuestAnnouncement(recipients[index], questName, details);
                             sent++;
-                        } catch (error) {
+                        } catch {
                             failed++;
                         }
                         if (index < recipients.length - 1) {
@@ -1329,11 +1694,11 @@ function initBotListeners(client, gateway) {
                     }
                     await api.interactions.editReply(CLIENT_ID, interaction.token, {
                         embeds: [{
-                            color: EMBED_COLOR,
-                            author: { name: "QUEST CONTROL  /  ANNOUNCEMENT" },
-                            title: `${Emojis.ORB} Quest Announcement Broadcast`,
+                            color: COLOR_NEUTRAL,
+                            author: { name: "QUEST CONTROL / ANNOUNCEMENT" },
+                            title: "Quest Announcement Broadcast",
                             description: `Delivered: **${sent}** · Failed: **${failed}** · Total: **${recipients.length}**`,
-                            footer: { text: "QUEST CONTROL  •  Announcements" },
+                            footer: { text: "Quest Control • Announcements" },
                         }],
                     });
                     return;
@@ -1344,9 +1709,9 @@ function initBotListeners(client, gateway) {
                     removeCategoryChannel(categoryChannels, guildId, "quest");
                     await api.interactions.reply(interaction.id, interaction.token, {
                         embeds: [{
-                            color: EMBED_COLOR,
-                            author: { name: "QUEST CONTROL  /  SETTINGS" },
-                            title: removed ? `${Emojis.CHECK} Quest Channel Cleared` : `${Emojis.INFO} No Channel Set`,
+                            color: COLOR_NEUTRAL,
+                            author: { name: "QUEST CONTROL / SETTINGS" },
+                            title: removed ? "Quest Channel Cleared" : "No Channel Set",
                             description: removed
                                 ? "Quest commands are now allowed in any channel."
                                 : "No channel restriction was set.",
@@ -1363,9 +1728,9 @@ function initBotListeners(client, gateway) {
                 saveCategoryChannel(categoryChannels, guildId, "quest", targetId);
                 await api.interactions.reply(interaction.id, interaction.token, {
                     embeds: [{
-                        color: EMBED_COLOR,
-                        author: { name: "QUEST CONTROL  /  SETTINGS" },
-                        title: `${Emojis.CHECK} Quest Channel Saved`,
+                        color: COLOR_NEUTRAL,
+                        author: { name: "QUEST CONTROL / SETTINGS" },
+                        title: "Quest Channel Saved",
                         description: `Quest commands now work only in <#${targetId}>.`,
                     }],
                     flags: 64,
@@ -1376,7 +1741,7 @@ function initBotListeners(client, gateway) {
             if (cmdData?.name === "quest-notify") {
                 if (!guildId) {
                     await api.interactions.reply(interaction.id, interaction.token, {
-                        content: "Use this command in a server.",
+                        content: "Use this command inside a server.",
                         flags: 64,
                     });
                     return;
@@ -1386,9 +1751,9 @@ function initBotListeners(client, gateway) {
                     const enabled = getQuestRecipients(questAudience, guildId).includes(userId);
                     await api.interactions.reply(interaction.id, interaction.token, {
                         embeds: [{
-                            color: EMBED_COLOR,
-                            author: { name: "QUEST CONTROL  /  NOTIFICATIONS" },
-                            title: enabled ? `${Emojis.ONLINE} Quest DMs On` : `${Emojis.OFFLINE} Quest DMs Off`,
+                            color: COLOR_NEUTRAL,
+                            author: { name: "QUEST CONTROL / NOTIFICATIONS" },
+                            title: enabled ? "Quest Notifications Active" : "Quest Notifications Inactive",
                             description: enabled
                                 ? "You will receive new quest announcements sent by server admins."
                                 : "Run `/quest-notify on` to receive quest announcement DMs.",
@@ -1400,7 +1765,7 @@ function initBotListeners(client, gateway) {
                 if (subcommand === "on" || subcommand === "off") {
                     setQuestNotification(questAudience, guildId, userId, subcommand === "on");
                     await api.interactions.reply(interaction.id, interaction.token, {
-                        content: subcommand === "on" ? `${Emojis.SUCCESS} Quest announcement DMs enabled.` : `${Emojis.INFO} Quest announcement DMs disabled.`,
+                        content: subcommand === "on" ? "Quest announcement DMs enabled." : "Quest announcement DMs disabled.",
                         flags: 64,
                     });
                     return;
@@ -1410,7 +1775,7 @@ function initBotListeners(client, gateway) {
 
             if (cmdData?.name === "quest-help") {
                 await api.interactions.reply(interaction.id, interaction.token, {
-                    ...buildHelpEmbed(),
+                    ...buildHelpEmbed("help_overview"),
                     flags: 64,
                 });
                 return;
@@ -1418,7 +1783,7 @@ function initBotListeners(client, gateway) {
 
             if (cmdData?.name === "quest-ping") {
                 await api.interactions.reply(interaction.id, interaction.token, {
-                    ...buildPingEmbed(),
+                    ...buildPingEmbed(1),
                     flags: 64,
                 });
                 return;
@@ -1434,11 +1799,12 @@ function initBotListeners(client, gateway) {
             }
 
             if (cmdData?.name === "unlink") {
+                clearUserPresence(userId);
                 const removed = removeUserToken(userId);
                 await api.interactions.reply(interaction.id, interaction.token, {
                     content: removed
-                        ? `${Emojis.SUCCESS} Your linked Discord token has been removed from the database.`
-                        : `${Emojis.INFO} You do not have any linked token in the database.`,
+                        ? "Your linked Discord token has been removed from the database."
+                        : "You do not have any linked token in the database.",
                     flags: 64,
                 });
                 return;
@@ -1453,7 +1819,59 @@ function initBotListeners(client, gateway) {
                 return;
             }
 
-            // Enforce linked token requirement for all action slash commands
+            // /presence slash command handling
+            if (cmdData?.name === "presence") {
+                const effectiveToken = getUserToken(userId);
+                if (!effectiveToken) {
+                    await api.interactions.reply(interaction.id, interaction.token, {
+                        ...buildMustLinkFirstEmbed("custom rich presence"),
+                        flags: 64,
+                    });
+                    return;
+                }
+
+                const sub = cmdData.options?.[0];
+                if (!sub || sub.name === "status") {
+                    const current = getUserPresence(userId);
+                    await api.interactions.reply(interaction.id, interaction.token, {
+                        ...buildPresenceEmbed(userId, current),
+                        flags: 64,
+                    });
+                    return;
+                }
+
+                if (sub.name === "clear") {
+                    clearUserPresence(userId);
+                    await api.interactions.reply(interaction.id, interaction.token, {
+                        ...buildPresenceEmbed(userId, null),
+                        flags: 64,
+                    });
+                    return;
+                }
+
+                if (sub.name === "game") {
+                    const preset = sub.options?.find((o) => o.name === "preset")?.value || "valorant";
+                    const details = sub.options?.find((o) => o.name === "details")?.value;
+                    const state = sub.options?.find((o) => o.name === "state")?.value;
+
+                    await api.interactions.defer(interaction.id, interaction.token, { flags: 64 });
+                    try {
+                        await setUserPresence(userId, effectiveToken, preset, { details, state });
+                        const current = getUserPresence(userId);
+                        await api.interactions.editReply(CLIENT_ID, interaction.token, {
+                            ...buildPresenceEmbed(userId, current),
+                        });
+                    } catch (err) {
+                        await api.interactions.editReply(CLIENT_ID, interaction.token, {
+                            content: `Failed to set presence: ${err.message}`,
+                        });
+                    }
+                    return;
+                }
+                return;
+            }
+
+            // Enforce linked token requirement for all remaining action slash commands
             const effectiveToken = getUserToken(userId);
             if (!effectiveToken) {
                 await api.interactions.reply(interaction.id, interaction.token, {
@@ -1465,10 +1883,9 @@ function initBotListeners(client, gateway) {
 
             if (cmdData?.name === "quest-status") {
                 await api.interactions.defer(interaction.id, interaction.token, { flags: 64 });
-                console.log(`[Slash /quest-status] started (user: ${userId})`);
                 await sendStatusEmbeds(channelId, effectiveToken);
                 await api.interactions.editReply(CLIENT_ID, interaction.token, {
-                    content: `${Emojis.STATUS} Quest status embeds sent above!`,
+                    content: "Quest status report sent above.",
                 });
                 return;
             }
@@ -1485,7 +1902,7 @@ function initBotListeners(client, gateway) {
                 await api.interactions.defer(interaction.id, interaction.token, { flags: 64 });
                 const sendInitial = async () =>
                     api.interactions.editReply(CLIENT_ID, interaction.token, {
-                        content: `${Emojis.CLOCK} Quest processing has started...`,
+                        content: "Quest processing has started...",
                     });
                 const editFinal = async (c) =>
                     void (await api.interactions.editReply(CLIENT_ID, interaction.token, { content: c }));
@@ -1514,7 +1931,7 @@ function initBotListeners(client, gateway) {
 
                 await api.interactions.defer(interaction.id, interaction.token, { flags: 64 });
                 await api.interactions.editReply(CLIENT_ID, interaction.token, {
-                    content: `${Emojis.CLOCK} Telemetry in progress: Spoofing Game Time badge (${targetHours} hours)...`,
+                    content: `Spoofing Game Time badge (${targetHours} hours)...`,
                 });
 
                 startRun(userId);
@@ -1527,23 +1944,23 @@ function initBotListeners(client, gateway) {
 
                     if (!spoofRes.success) {
                         await api.interactions.editReply(CLIENT_ID, interaction.token, {
-                            content: `${Emojis.ERROR} Badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`,
+                            content: `Badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`,
                         });
                     } else {
                         await api.interactions.editReply(CLIENT_ID, interaction.token, {
                             embeds: [
                                 {
-                                    color: EMBED_COLOR,
-                                    author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
-                                    title: `${Emojis.GAME} Game Time Badge Spoofed`,
+                                    color: COLOR_SUCCESS,
+                                    author: { name: "QUEST CONTROL / BADGE SPOOFER" },
+                                    title: "Game Time Badge Spoofed",
                                     description: [
-                                        `Successfully simulated **${spoofRes.totalHoursSpoofed} hours** across **${spoofRes.gamesSpoofed} game(s)**!`,
-                                        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                        `**${Emojis.GAME} Mode:** Game Time Playtime`,
-                                        `**${Emojis.TIME} Hours Logged:** ${spoofRes.totalHoursSpoofed}h`,
-                                        `**${Emojis.CALENDAR} Profile Sync:** Discord profile badges update in batches within 24-48 hours.`,
+                                        `Successfully registered **${spoofRes.totalHoursSpoofed} hours** across **${spoofRes.gamesSpoofed} game(s)**!`,
+                                        "",
+                                        `• **Mode:** Game Time Playtime`,
+                                        `• **Hours Logged:** ${spoofRes.totalHoursSpoofed}h`,
+                                        `• **Profile Sync:** Discord profile badges update in batches within 24 to 48 hours.`,
                                     ].join("\n"),
-                                    footer: { text: "QUEST CONTROL  •  Discord Science Telemetry" },
+                                    footer: { text: "Quest Control • Discord Science Telemetry" },
                                     timestamp: new Date().toISOString(),
                                 },
                             ],
@@ -1570,7 +1987,7 @@ function initBotListeners(client, gateway) {
 
                 await api.interactions.defer(interaction.id, interaction.token, { flags: 64 });
                 await api.interactions.editReply(CLIENT_ID, interaction.token, {
-                    content: `${Emojis.CLOCK} Telemetry in progress: Spoofing Streaming badge (${targetHours} stream hours)...`,
+                    content: `Spoofing Streaming badge (${targetHours} stream hours)...`,
                 });
 
                 startRun(userId);
@@ -1583,23 +2000,23 @@ function initBotListeners(client, gateway) {
 
                     if (!spoofRes.success) {
                         await api.interactions.editReply(CLIENT_ID, interaction.token, {
-                            content: `${Emojis.ERROR} Streaming badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`,
+                            content: `Streaming badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`,
                         });
                     } else {
                         await api.interactions.editReply(CLIENT_ID, interaction.token, {
                             embeds: [
                                 {
-                                    color: EMBED_COLOR,
-                                    author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
-                                    title: `${Emojis.STREAM} Streaming Badge Spoofed`,
+                                    color: COLOR_SUCCESS,
+                                    author: { name: "QUEST CONTROL / BADGE SPOOFER" },
+                                    title: "Streaming Badge Spoofed",
                                     description: [
                                         `Successfully registered **${spoofRes.totalHoursSpoofed} stream hours** across **${spoofRes.gamesSpoofed} title(s)**!`,
-                                        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                        `**${Emojis.STREAM} Mode:** Live Screenshare & Video Streaming`,
-                                        `**${Emojis.TIME} Duration Tracked:** ${spoofRes.totalHoursSpoofed} hours`,
-                                        `**${Emojis.CALENDAR} Profile Sync:** Discord profile badges update in batches within 24-48 hours.`,
+                                        "",
+                                        `• **Mode:** Live Screenshare and Video Streaming`,
+                                        `• **Duration Tracked:** ${spoofRes.totalHoursSpoofed} hours`,
+                                        `• **Profile Sync:** Discord profile badges update in batches within 24 to 48 hours.`,
                                     ].join("\n"),
-                                    footer: { text: "QUEST CONTROL  •  Discord Science Telemetry" },
+                                    footer: { text: "Quest Control • Discord Science Telemetry" },
                                     timestamp: new Date().toISOString(),
                                 },
                             ],
@@ -1625,7 +2042,7 @@ function initBotListeners(client, gateway) {
 
                 await api.interactions.defer(interaction.id, interaction.token, { flags: 64 });
                 await api.interactions.editReply(CLIENT_ID, interaction.token, {
-                    content: `${Emojis.CLOCK} Telemetry in progress: Spoofing Game Variety badge (${targetGames} games)...`,
+                    content: `Spoofing Game Variety badge (${targetGames} games)...`,
                 });
 
                 startRun(userId);
@@ -1638,23 +2055,23 @@ function initBotListeners(client, gateway) {
 
                     if (!spoofRes.success) {
                         await api.interactions.editReply(CLIENT_ID, interaction.token, {
-                            content: `${Emojis.ERROR} Variety badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`,
+                            content: `Variety badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`,
                         });
                     } else {
                         await api.interactions.editReply(CLIENT_ID, interaction.token, {
                             embeds: [
                                 {
-                                    color: EMBED_COLOR,
-                                    author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
-                                    title: `${Emojis.ACTIVITY} Game Variety Badge Spoofed`,
+                                    color: COLOR_SUCCESS,
+                                    author: { name: "QUEST CONTROL / BADGE SPOOFER" },
+                                    title: "Game Variety Badge Spoofed",
                                     description: [
                                         `Successfully registered **${spoofRes.gamesSpoofed} distinct detectable games**!`,
-                                        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                        `**${Emojis.ACTIVITY} Mode:** Game Variety`,
-                                        `**${Emojis.GAME} Games Registered:** ${spoofRes.gamesSpoofed} games`,
-                                        `**${Emojis.CALENDAR} Profile Sync:** Discord profile badges update in batches within 24-48 hours.`,
+                                        "",
+                                        `• **Mode:** Game Variety`,
+                                        `• **Games Registered:** ${spoofRes.gamesSpoofed} games`,
+                                        `• **Profile Sync:** Discord profile badges update in batches within 24 to 48 hours.`,
                                     ].join("\n"),
-                                    footer: { text: "QUEST CONTROL  •  Discord Science Telemetry" },
+                                    footer: { text: "Quest Control • Discord Science Telemetry" },
                                     timestamp: new Date().toISOString(),
                                 },
                             ],
@@ -1668,7 +2085,7 @@ function initBotListeners(client, gateway) {
         },
     );
 
-    // ── Prefix Commands: Quests, Badges & Owner Operations ─────────────────────
+    // ── Prefix Commands: Quests, Badges, Presence, and Admin ─────────────────
     client.on(
         GatewayDispatchEvents.MessageCreate,
         async ({ data: message, api }) => {
@@ -1689,10 +2106,10 @@ function initBotListeners(client, gateway) {
                 if (userIsOwner) return true;
                 await api.channels.createMessage(channelId, {
                     embeds: [{
-                        color: 0xed4245,
-                        author: { name: "QUEST CONTROL  /  ACCESS CONTROL" },
-                        title: `${Emojis.CROSS} Access Denied`,
-                        description: "This command is restricted to bot owners configured in the `OWNER_ID` environment variable.",
+                        color: COLOR_DANGER,
+                        author: { name: "QUEST CONTROL / ACCESS CONTROL" },
+                        title: "Access Denied",
+                        description: "This command is restricted to configured bot owners.",
                     }],
                     message_reference: { message_id: message.id },
                 }).catch(() => {});
@@ -1702,7 +2119,7 @@ function initBotListeners(client, gateway) {
             // ── 1. HELP COMMANDS (!help, !quest help) ─────────────────────────
             if (command === "help" || (command === "quest" && subArgs[0]?.toLowerCase() === "help")) {
                 await api.channels.createMessage(channelId, {
-                    ...buildHelpEmbed(),
+                    ...buildHelpEmbed("help_overview"),
                     message_reference: { message_id: message.id },
                 }).catch(() => {});
                 return;
@@ -1712,38 +2129,92 @@ function initBotListeners(client, gateway) {
             if (command === "ping" || (command === "quest" && subArgs[0]?.toLowerCase() === "ping")) {
                 const start = Date.now();
                 const sent = await api.channels.createMessage(channelId, {
-                    content: `${Emojis.PONG} Pinging...`,
+                    content: "Pinging...",
                     message_reference: { message_id: message.id },
                 }).catch(() => null);
                 const latency = Date.now() - start;
                 if (sent?.id) {
                     await api.channels.editMessage(channelId, sent.id, {
                         content: "",
-                        embeds: [{
-                            color: EMBED_COLOR,
-                            author: { name: "QUEST CONTROL  /  SYSTEM" },
-                            title: `${Emojis.PONG} Pong!`,
-                            description: [
-                                "All systems are operational.",
-                                "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                `${Emojis.ONLINE} **Gateway Status:** ${isBotConnected ? "Online" : "Standby"}`,
-                                `${Emojis.TIME} **API Latency:** ${latency}ms`,
-                                `${Emojis.CLOCK} **Uptime:** ${Math.floor(process.uptime() / 60)} minutes`,
-                            ].join("\n"),
-                            footer: { text: "QUEST CONTROL  •  Diagnostic" },
-                            timestamp: new Date().toISOString(),
-                        }],
+                        ...buildPingEmbed(latency),
                     }).catch(() => {});
                 }
                 return;
             }
 
-            // ── 3. OWNER: !sync [guildId] ─────────────────────────────────────
+            // ── 3. RICH PRESENCE (!presence [valorant|vscode|minecraft|stream|clear]) ──
+            if (command === "presence") {
+                const subCmd = subArgs[0]?.toLowerCase();
+                const token = getUserToken(userId);
+
+                if (!token) {
+                    await api.channels.createMessage(channelId, {
+                        content: `<@${userId}>`,
+                        ...buildMustLinkFirstEmbed("custom rich presence"),
+                        message_reference: { message_id: message.id },
+                    }).catch(() => {});
+                    return;
+                }
+
+                if (!subCmd || subCmd === "panel" || subCmd === "menu") {
+                    const current = getUserPresence(userId);
+                    await api.channels.createMessage(channelId, {
+                        ...buildPresenceEmbed(userId, current),
+                        message_reference: { message_id: message.id },
+                    }).catch(() => {});
+                    return;
+                }
+
+                if (["clear", "off", "stop", "reset"].includes(subCmd)) {
+                    clearUserPresence(userId);
+                    await api.channels.createMessage(channelId, {
+                        content: `<@${userId}> Custom rich presence has been turned off.`,
+                        message_reference: { message_id: message.id },
+                    }).catch(() => {});
+                    return;
+                }
+
+                if (subCmd === "status") {
+                    const current = getUserPresence(userId);
+                    await api.channels.createMessage(channelId, {
+                        ...buildPresenceEmbed(userId, current),
+                        message_reference: { message_id: message.id },
+                    }).catch(() => {});
+                    return;
+                }
+
+                if (["valorant", "vscode", "minecraft", "league", "stream"].includes(subCmd)) {
+                    const customDetails = subArgs.slice(1).join(" ") || undefined;
+                    try {
+                        await setUserPresence(userId, token, subCmd, { details: customDetails });
+                        const current = getUserPresence(userId);
+                        await api.channels.createMessage(channelId, {
+                            content: `<@${userId}> Rich presence activated for **${GAME_PRESETS[subCmd]?.label || subCmd}**!`,
+                            ...buildPresenceEmbed(userId, current),
+                            message_reference: { message_id: message.id },
+                        }).catch(() => {});
+                    } catch (err) {
+                        await api.channels.createMessage(channelId, {
+                            content: `<@${userId}> Failed to set rich presence: ${err.message}`,
+                            message_reference: { message_id: message.id },
+                        }).catch(() => {});
+                    }
+                    return;
+                }
+
+                await api.channels.createMessage(channelId, {
+                    content: "Usage: `!presence valorant`, `!presence vscode`, `!presence stream`, `!presence clear`, or `!presence` to open control panel.",
+                    message_reference: { message_id: message.id },
+                }).catch(() => {});
+                return;
+            }
+
+            // ── 4. OWNER: !sync [guildId] ─────────────────────────────────────
             if (command === "sync") {
                 if (!await requireOwner()) return;
                 const targetGuild = subArgs[0] || guildId;
                 const statusMsg = await api.channels.createMessage(channelId, {
-                    content: `${Emojis.CLOCK} Synchronizing slash commands ${targetGuild ? `for guild \`${targetGuild}\`` : "globally"}...`,
+                    content: `Synchronizing slash commands ${targetGuild ? `for guild \`${targetGuild}\`` : "globally"}...`,
                     message_reference: { message_id: message.id },
                 }).catch(() => null);
 
@@ -1755,16 +2226,16 @@ function initBotListeners(client, gateway) {
                         await api.channels.editMessage(channelId, statusMsg.id, {
                             content: "",
                             embeds: [{
-                                color: 0x57f287,
-                                author: { name: "QUEST CONTROL  /  OWNER MANAGEMENT" },
-                                title: `${Emojis.CHECK} Commands Synchronized`,
+                                color: COLOR_SUCCESS,
+                                author: { name: "QUEST CONTROL / OWNER MANAGEMENT" },
+                                title: "Slash Commands Synchronized",
                                 description: [
                                     `Successfully registered **${res.count} slash commands**!`,
-                                    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                    `**${Emojis.PIN} Scope:** ${targetGuild ? `Guild: \`${targetGuild}\` (Instant)` : "Global"}`,
-                                    `**${Emojis.TIME} Duration:** ${elapsed}ms`,
+                                    "",
+                                    `• **Scope:** ${targetGuild ? `Guild: \`${targetGuild}\` (Instant)` : "Global"}`,
+                                    `• **Duration:** ${elapsed}ms`,
                                 ].join("\n"),
-                                footer: { text: "QUEST CONTROL  •  Owner Action" },
+                                footer: { text: "Quest Control • Owner Action" },
                                 timestamp: new Date().toISOString(),
                             }],
                         }).catch(() => {});
@@ -1772,14 +2243,14 @@ function initBotListeners(client, gateway) {
                 } catch (err) {
                     if (statusMsg?.id) {
                         await api.channels.editMessage(channelId, statusMsg.id, {
-                            content: `${Emojis.ERROR} Command synchronization failed: \`${err.message || err}\``,
+                            content: `Command synchronization failed: \`${err.message || err}\``,
                         }).catch(() => {});
                     }
                 }
                 return;
             }
 
-            // ── 4. OWNER: !stats ──────────────────────────────────────────────
+            // ── 5. OWNER: !stats ──────────────────────────────────────────────
             if (command === "stats") {
                 if (!await requireOwner()) return;
                 const mem = process.memoryUsage();
@@ -1791,20 +2262,20 @@ function initBotListeners(client, gateway) {
 
                 await api.channels.createMessage(channelId, {
                     embeds: [{
-                        color: EMBED_COLOR,
-                        author: { name: "QUEST CONTROL  /  BOT DIAGNOSTICS" },
-                        title: `${Emojis.STATS} System Metrics & Stats`,
+                        color: COLOR_NEUTRAL,
+                        author: { name: "QUEST CONTROL / BOT DIAGNOSTICS" },
+                        title: "System Metrics",
                         description: [
-                            `**${Emojis.BOT} Gateway:** ${isBotConnected ? "Online" : "Standby"}`,
-                            `**${Emojis.CLOCK} Bot Uptime:** ${hours}h ${minutes}m ${seconds}s`,
-                            `**${Emojis.GEAR} Node:** ${process.version}`,
-                            `**${Emojis.STATS} Memory (RSS):** ${formatMb(mem.rss)}`,
-                            `**${Emojis.STATS} Heap (Used / Total):** ${formatMb(mem.heapUsed)} / ${formatMb(mem.heapTotal)}`,
-                            `**${Emojis.RUN} Active Quest Runs:** ${activeUsers.size} user(s)`,
-                            `**${Emojis.CROWN} Configured Owners:** ${OWNER_IDS.length} owner(s)`,
-                            `**${Emojis.SERVER} Port 3000 Server:** Active`,
+                            `• **Gateway:** ${isBotConnected ? "Online" : "Standby"}`,
+                            `• **Uptime:** ${hours}h ${minutes}m ${seconds}s`,
+                            `• **Node Runtime:** ${process.version}`,
+                            `• **Memory RSS:** ${formatMb(mem.rss)}`,
+                            `• **Heap Used:** ${formatMb(mem.heapUsed)} / ${formatMb(mem.heapTotal)}`,
+                            `• **Active Runs:** ${activeUsers.size} active user(s)`,
+                            `• **Configured Owners:** ${OWNER_IDS.length} owner(s)`,
+                            `• **HTTP Port:** ${HTTP_PORT}`,
                         ].join("\n"),
-                        footer: { text: "QUEST CONTROL  •  Owner Diagnostics" },
+                        footer: { text: "Quest Control • System Diagnostics" },
                         timestamp: new Date().toISOString(),
                     }],
                     message_reference: { message_id: message.id },
@@ -1812,41 +2283,14 @@ function initBotListeners(client, gateway) {
                 return;
             }
 
-            // ── 5. OWNER: !owner (help / eval) ────────────────────────────────
+            // ── 6. OWNER: !owner (help / eval) ────────────────────────────────
             if (command === "owner") {
                 if (!await requireOwner()) return;
                 const action = subArgs[0]?.toLowerCase();
 
                 if (action === "help") {
                     await api.channels.createMessage(channelId, {
-                        embeds: [{
-                            color: EMBED_COLOR,
-                            author: { name: "QUEST CONTROL  /  OWNER MANUAL" },
-                            title: `${Emojis.CROWN} Owner Commands Guide`,
-                            description: [
-                                "Administrative commands available only to IDs specified in `OWNER_ID` in `.env`.",
-                                "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                `**${Emojis.GEAR} Command Deployment:**`,
-                                "• `!sync` — register global slash commands",
-                                "• `!sync <guildId>` — register instant guild slash commands",
-                                "",
-                                `**${Emojis.STATS} Diagnostics:**`,
-                                "• `!stats` — view uptime, RAM usage, gateway state, and runners",
-                                "",
-                                `**${Emojis.PIN} Channel Restrictions:**`,
-                                "• `!channel-set <quest/badges> <#channel or id>` — restrict commands to designated channel",
-                                "• `!channel-set` — view current server configured channels",
-                                "• `!channel-set <quest/badges> reset` — clear restriction",
-                                "",
-                                `**${Emojis.MAIL} Announcements:**`,
-                                "• `!announce <quest_name> [details]` — DM registered users",
-                                "",
-                                `**${Emojis.KEY} Code Execution:**`,
-                                "• `!owner eval <code>` — execute JavaScript expression in bot runtime",
-                            ].join("\n"),
-                            footer: { text: "QUEST CONTROL  •  Owner privileged interface" },
-                            timestamp: new Date().toISOString(),
-                        }],
+                        ...buildHelpEmbed("help_admin"),
                         message_reference: { message_id: message.id },
                     }).catch(() => {});
                     return;
@@ -1856,7 +2300,7 @@ function initBotListeners(client, gateway) {
                     const codeToEval = subArgs.slice(1).join(" ");
                     if (!codeToEval) {
                         await api.channels.createMessage(channelId, {
-                            content: `${Emojis.ERROR} Please provide code to evaluate: \`!owner eval <code>\``,
+                            content: "Please provide code to evaluate: `!owner eval <code>`",
                             message_reference: { message_id: message.id },
                         }).catch(() => {});
                         return;
@@ -1874,7 +2318,7 @@ function initBotListeners(client, gateway) {
                         }).catch(() => {});
                     } catch (err) {
                         await api.channels.createMessage(channelId, {
-                            content: `${Emojis.ERROR} **Eval Error:** \`\`\`${err.message || err}\`\`\``,
+                            content: `**Eval Error:** \`\`\`${err.message || err}\`\`\``,
                             message_reference: { message_id: message.id },
                         }).catch(() => {});
                     }
@@ -1888,7 +2332,7 @@ function initBotListeners(client, gateway) {
                 return;
             }
 
-            // ── 6. OWNER/ADMIN: !announce <quest> [details] ───────────────────
+            // ── 7. OWNER/ADMIN: !announce <quest> [details] ───────────────────
             if (command === "announce" || (command === "quest" && subArgs[0]?.toLowerCase() === "announce")) {
                 if (!await requireOwner()) return;
                 const announceArgs = command === "announce" ? subArgs : subArgs.slice(1);
@@ -1896,14 +2340,14 @@ function initBotListeners(client, gateway) {
                 const details = announceArgs.slice(1).join(" ");
                 if (!questName) {
                     await api.channels.createMessage(channelId, {
-                        content: `${Emojis.ERROR} Usage: \`!announce <quest_name> [optional_details]\``,
+                        content: "Usage: `!announce <quest_name> [optional_details]`",
                         message_reference: { message_id: message.id },
                     }).catch(() => {});
                     return;
                 }
                 if (!guildId) {
                     await api.channels.createMessage(channelId, {
-                        content: `${Emojis.ERROR} Announcements can only be sent from inside a server.`,
+                        content: "Announcements can only be sent from inside a server.",
                         message_reference: { message_id: message.id },
                     }).catch(() => {});
                     return;
@@ -1912,14 +2356,14 @@ function initBotListeners(client, gateway) {
                 const recipients = getQuestRecipients(questAudience, guildId);
                 if (recipients.length === 0) {
                     await api.channels.createMessage(channelId, {
-                        content: `${Emojis.WARNING} No members registered for quest notifications in this guild yet.`,
+                        content: "No members registered for quest notifications in this guild yet.",
                         message_reference: { message_id: message.id },
                     }).catch(() => {});
                     return;
                 }
 
                 const progressMsg = await api.channels.createMessage(channelId, {
-                    content: `${Emojis.CLOCK} Sending announcement to **${recipients.length}** recipient(s)...`,
+                    content: `Sending announcement to **${recipients.length}** recipient(s)...`,
                     message_reference: { message_id: message.id },
                 }).catch(() => null);
 
@@ -1941,17 +2385,17 @@ function initBotListeners(client, gateway) {
                     await api.channels.editMessage(channelId, progressMsg.id, {
                         content: "",
                         embeds: [{
-                            color: EMBED_COLOR,
-                            author: { name: "QUEST CONTROL  /  ANNOUNCEMENT" },
-                            title: `${Emojis.CHECK} Announcement Broadcast Complete`,
+                            color: COLOR_NEUTRAL,
+                            author: { name: "QUEST CONTROL / ANNOUNCEMENT" },
+                            title: "Announcement Broadcast Complete",
                             description: [
                                 `Announced quest: **${questName}**`,
-                                "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                `${Emojis.MAIL} **Delivered:** ${sent} users`,
-                                `${Emojis.WARNING} **Failed / DMs Closed:** ${failed} users`,
-                                `${Emojis.USER} **Total Targeted:** ${recipients.length} users`,
+                                "",
+                                `• **Delivered:** ${sent} users`,
+                                `• **Failed / DMs Closed:** ${failed} users`,
+                                `• **Total Targeted:** ${recipients.length} users`,
                             ].join("\n"),
-                            footer: { text: "QUEST CONTROL  •  Notification System" },
+                            footer: { text: "Quest Control • Notification System" },
                             timestamp: new Date().toISOString(),
                         }],
                     }).catch(() => {});
@@ -1959,16 +2403,11 @@ function initBotListeners(client, gateway) {
                 return;
             }
 
-            // ── 7. ACCOUNT LINKING: STRICT MODAL-ONLY ENFORCEMENT ─────────────
-            // User requested: "Also no shortcut for !link /link user have to put token in modal only and nowhere else"
+            // ── 8. ACCOUNT LINKING: STRICT MODAL-ONLY ENFORCEMENT ─────────────
             if (command === "link") {
                 const tokenInput = subArgs[0]?.trim();
                 if (tokenInput && tokenInput.length >= 10) {
-                    // User attempted to pass token as a text argument:
-                    // Delete message immediately to protect privacy
                     await safeDeleteMessage(api, channelId, message.id);
-
-                    // Refuse token shortcut and enforce modal input
                     await api.channels.createMessage(channelId, {
                         content: `<@${userId}>`,
                         ...buildMustLinkFirstEmbed("account linking"),
@@ -1976,7 +2415,6 @@ function initBotListeners(client, gateway) {
                     return;
                 }
 
-                // User ran !link without arguments: show embed with modal button
                 const rec = getUserRecord(userId);
                 await api.channels.createMessage(channelId, {
                     ...buildLinkEmbed(rec),
@@ -1986,11 +2424,12 @@ function initBotListeners(client, gateway) {
             }
 
             if (command === "unlink" || command === "delink") {
+                clearUserPresence(userId);
                 const removed = removeUserToken(userId);
                 await api.channels.createMessage(channelId, {
                     content: removed
-                        ? `${Emojis.SUCCESS} <@${userId}> Your linked Discord token has been removed from the database.`
-                        : `${Emojis.INFO} <@${userId}> You don't have any linked token in the database. Use \`!link\` to connect your account.`,
+                        ? `<@${userId}> Your linked Discord token has been removed from the database.`
+                        : `<@${userId}> You don't have any linked token in the database. Use \`!link\` to connect your account.`,
                     message_reference: { message_id: message.id },
                 }).catch(() => {});
                 return;
@@ -2005,11 +2444,11 @@ function initBotListeners(client, gateway) {
                 return;
             }
 
-            // ── 8. OWNER: !channel-set <quest/badges> <channel/id> ─────────────
+            // ── 9. OWNER: !channel-set <quest/badges> <channel/id> ─────────────
             if (command === "channel-set") {
                 if (!await requireOwner()) return;
                 if (!guildId) {
-                    await api.channels.createMessage(channelId, { content: `${Emojis.ERROR} This command must be used inside a server.` }).catch(() => {});
+                    await api.channels.createMessage(channelId, { content: "This command must be used inside a server." }).catch(() => {});
                     return;
                 }
 
@@ -2018,22 +2457,22 @@ function initBotListeners(client, gateway) {
                     const badgeChan = getCategoryChannel(categoryChannels, guildId, "badges");
                     await api.channels.createMessage(channelId, {
                         embeds: [{
-                            color: EMBED_COLOR,
-                            author: { name: "QUEST CONTROL  /  SERVER CHANNELS" },
-                            title: `${Emojis.PIN} Channel Command Restrictions`,
+                            color: COLOR_NEUTRAL,
+                            author: { name: "QUEST CONTROL / SERVER CHANNELS" },
+                            title: "Channel Command Restrictions",
                             description: [
                                 "Configured channels for this server. When set, users are restricted to that channel only.",
-                                "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                `**${Emojis.ACTIVITY} Quest Commands:** ${questChan ? `<#${questChan}>` : `${Emojis.ONLINE} Any channel`}`,
-                                `**${Emojis.GAME} Badge Commands:** ${badgeChan ? `<#${badgeChan}>` : `${Emojis.ONLINE} Any channel`}`,
                                 "",
-                                `**Usage Guide:**`,
+                                `• **Quest Commands:** ${questChan ? `<#${questChan}>` : "Any channel"}`,
+                                `• **Badge Commands:** ${badgeChan ? `<#${badgeChan}>` : "Any channel"}`,
+                                "",
+                                "## Usage Guide",
                                 "• `!channel-set quest <#channel or id>` — lock quest commands to channel",
                                 "• `!channel-set badges <#channel or id>` — lock badge commands to channel",
                                 "• `!channel-set quest reset` — remove quest channel lock",
                                 "• `!channel-set badges reset` — remove badges channel lock",
                             ].join("\n"),
-                            footer: { text: "QUEST CONTROL  •  Owner Channel Configuration" },
+                            footer: { text: "Quest Control • Owner Channel Configuration" },
                             timestamp: new Date().toISOString(),
                         }],
                         message_reference: { message_id: message.id },
@@ -2044,7 +2483,7 @@ function initBotListeners(client, gateway) {
                 const category = normalizeCategory(subArgs[0]);
                 if (!category) {
                     await api.channels.createMessage(channelId, {
-                        content: `${Emojis.ERROR} Invalid category! Choose either \`quest\` or \`badges\`:\n\`!channel-set <quest/badges> <#channel or id>\``,
+                        content: "Invalid category. Choose either `quest` or `badges`:\n`!channel-set <quest/badges> <#channel or id>`",
                         message_reference: { message_id: message.id },
                     }).catch(() => {});
                     return;
@@ -2053,7 +2492,7 @@ function initBotListeners(client, gateway) {
                 const rawTarget = subArgs[1];
                 if (!rawTarget) {
                     await api.channels.createMessage(channelId, {
-                        content: `${Emojis.ERROR} Please specify a channel or \`reset\`:\n\`!channel-set ${category} <#channel or id>\`\n\`!channel-set ${category} reset\``,
+                        content: `Please specify a channel or \`reset\`:\n\`!channel-set ${category} <#channel or id>\`\n\`!channel-set ${category} reset\``,
                         message_reference: { message_id: message.id },
                     }).catch(() => {});
                     return;
@@ -2065,7 +2504,7 @@ function initBotListeners(client, gateway) {
                         removeQuestChannel(questChannels, guildId);
                     }
                     await api.channels.createMessage(channelId, {
-                        content: `${Emojis.SUCCESS} **${category === "quest" ? "Quest" : "Badge"}** channel restriction cleared. Users can now use ${category} commands in any channel.`,
+                        content: `**${category === "quest" ? "Quest" : "Badge"}** channel restriction cleared. Commands allowed in any channel.`,
                         message_reference: { message_id: message.id },
                     }).catch(() => {});
                     return;
@@ -2074,7 +2513,7 @@ function initBotListeners(client, gateway) {
                 const targetId = rawTarget.replace(/[^0-9]/g, "");
                 if (!/^\d{17,20}$/.test(targetId)) {
                     await api.channels.createMessage(channelId, {
-                        content: `${Emojis.ERROR} Invalid channel! Mention a channel or provide a valid channel ID: \`!channel-set <quest/badges> #channel\``,
+                        content: "Invalid channel. Mention a channel or provide a valid ID: `!channel-set <quest/badges> #channel`",
                         message_reference: { message_id: message.id },
                     }).catch(() => {});
                     return;
@@ -2085,7 +2524,7 @@ function initBotListeners(client, gateway) {
                     saveQuestChannel(questChannels, guildId, targetId);
                 }
                 await api.channels.createMessage(channelId, {
-                    content: `${Emojis.SUCCESS} **${category === "quest" ? "Quest" : "Badge"}** commands locked to <#${targetId}>. Users will only be allowed to use ${category} commands in that channel.`,
+                    content: `**${category === "quest" ? "Quest" : "Badge"}** commands locked to <#${targetId}>.`,
                     message_reference: { message_id: message.id },
                 }).catch(() => {});
                 return;
@@ -2097,11 +2536,11 @@ function initBotListeners(client, gateway) {
                 if (notice && !userIsOwner) {
                     await api.channels.createMessage(channelId, {
                         embeds: [{
-                            color: EMBED_COLOR,
-                            author: { name: "QUEST CONTROL  /  ACCESS" },
-                            title: `${Emojis.ORB} Quest Channel Only`,
+                            color: COLOR_NEUTRAL,
+                            author: { name: "QUEST CONTROL / ACCESS" },
+                            title: "Quest Channel Restriction",
                             description: notice,
-                            footer: { text: "QUEST CONTROL  •  Channel restriction" },
+                            footer: { text: "Quest Control • Channel lock active" },
                         }],
                         message_reference: { message_id: message.id },
                     }).catch(() => {});
@@ -2114,11 +2553,11 @@ function initBotListeners(client, gateway) {
                 if (notice && !userIsOwner) {
                     await api.channels.createMessage(channelId, {
                         embeds: [{
-                            color: EMBED_COLOR,
-                            author: { name: "QUEST CONTROL  /  ACCESS" },
-                            title: `${Emojis.ORB} Badge Channel Only`,
+                            color: COLOR_NEUTRAL,
+                            author: { name: "QUEST CONTROL / ACCESS" },
+                            title: "Badge Channel Restriction",
                             description: notice,
-                            footer: { text: "QUEST CONTROL  •  Channel restriction" },
+                            footer: { text: "Quest Control • Channel lock active" },
                         }],
                         message_reference: { message_id: message.id },
                     }).catch(() => {});
@@ -2127,13 +2566,13 @@ function initBotListeners(client, gateway) {
             }
             rememberQuestUser(guildId, userId);
 
-            // ── 9. BADGE SPOOFER COMMANDS ─────────────────────────────────────
+            // ── 10. BADGE SPOOFER COMMANDS ────────────────────────────────────
             if (command === "badge") {
                 const subCmd = subArgs[0]?.toLowerCase();
 
                 if (!subCmd || subCmd === "help") {
                     await api.channels.createMessage(channelId, {
-                        ...buildBadgeHelpEmbed(),
+                        ...buildHelpEmbed("help_badges"),
                         message_reference: { message_id: message.id },
                     }).catch(() => {});
                     return;
@@ -2147,13 +2586,11 @@ function initBotListeners(client, gateway) {
                     return;
                 }
 
-                // If user pastes a token into badge command, delete and require linking
                 const possibleToken = subArgs.find((a) => a && (a.length >= 25 || a.includes(".")));
                 if (possibleToken) {
                     await safeDeleteMessage(api, channelId, message.id);
                 }
 
-                // Enforce that user MUST link their token first
                 const token = getUserToken(userId);
                 if (!token) {
                     await api.channels.createMessage(channelId, {
@@ -2172,7 +2609,7 @@ function initBotListeners(client, gateway) {
                     return;
                 }
 
-                // ── !badge playtime [hours] [game] ────────────────────────────
+                // !badge playtime [hours] [game]
                 if (subCmd === "playtime") {
                     const hoursRaw = subArgs[1];
                     const queryGame = subArgs[2];
@@ -2189,7 +2626,7 @@ function initBotListeners(client, gateway) {
                     }
 
                     const progressMsg = await api.channels.createMessage(channelId, {
-                        content: `${Emojis.CLOCK} <@${userId}> Telemetry in progress: Spoofing **${hours} hours** on **${matchedGame.name}**...`,
+                        content: `<@${userId}> Telemetry in progress: Spoofing **${hours} hours** on **${matchedGame.name}**...`,
                     }).catch(() => null);
 
                     startRun(userId);
@@ -2201,7 +2638,7 @@ function initBotListeners(client, gateway) {
                         });
 
                         if (!spoofRes.success) {
-                            const errorContent = `${Emojis.ERROR} <@${userId}> Badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`;
+                            const errorContent = `<@${userId}> Badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`;
                             if (progressMsg?.id) {
                                 await api.channels.editMessage(channelId, progressMsg.id, { content: errorContent }).catch(() => {});
                             } else {
@@ -2209,18 +2646,18 @@ function initBotListeners(client, gateway) {
                             }
                         } else {
                             const embed = {
-                                color: EMBED_COLOR,
-                                author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
-                                title: `${Emojis.GAME} Game Time Badge Spoofed`,
+                                color: COLOR_SUCCESS,
+                                author: { name: "QUEST CONTROL / BADGE SPOOFER" },
+                                title: "Game Time Badge Spoofed",
                                 description: [
                                     `<@${userId}> Successfully registered **${spoofRes.totalHoursSpoofed} hours** for **${matchedGame.name}**!`,
-                                    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                    `**${Emojis.GAME} Game Title:** ${matchedGame.name}`,
-                                    `**${Emojis.TIME} Hours Logged:** ${spoofRes.totalHoursSpoofed}h`,
-                                    `**${Emojis.PIN} Application ID:** \`${matchedGame.id}\``,
-                                    `**${Emojis.CALENDAR} Profile Sync:** Discord profile badges update in batches within 24-48 hours.`,
+                                    "",
+                                    `• **Game Title:** ${matchedGame.name}`,
+                                    `• **Hours Logged:** ${spoofRes.totalHoursSpoofed}h`,
+                                    `• **Application ID:** \`${matchedGame.id}\``,
+                                    `• **Profile Sync:** Discord profile badges update in batches within 24 to 48 hours.`,
                                 ].join("\n"),
-                                footer: { text: "QUEST CONTROL  •  Discord Science Telemetry Pipeline" },
+                                footer: { text: "Quest Control • Discord Science Telemetry" },
                                 timestamp: new Date().toISOString(),
                             };
                             if (progressMsg?.id) {
@@ -2235,7 +2672,7 @@ function initBotListeners(client, gateway) {
                     return;
                 }
 
-                // ── !badge stream [hours] [game] ──────────────────────────────
+                // !badge stream [hours] [game]
                 if (subCmd === "stream") {
                     const hoursRaw = subArgs[1];
                     const queryGame = subArgs[2];
@@ -2252,7 +2689,7 @@ function initBotListeners(client, gateway) {
                     }
 
                     const progressMsg = await api.channels.createMessage(channelId, {
-                        content: `${Emojis.CLOCK} <@${userId}> Telemetry in progress: Spoofing **${hours} streaming hours** on **${matchedGame.name}**...`,
+                        content: `<@${userId}> Telemetry in progress: Spoofing **${hours} streaming hours** on **${matchedGame.name}**...`,
                     }).catch(() => null);
 
                     startRun(userId);
@@ -2264,7 +2701,7 @@ function initBotListeners(client, gateway) {
                         });
 
                         if (!spoofRes.success) {
-                            const errorContent = `${Emojis.ERROR} <@${userId}> Streaming badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`;
+                            const errorContent = `<@${userId}> Streaming badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`;
                             if (progressMsg?.id) {
                                 await api.channels.editMessage(channelId, progressMsg.id, { content: errorContent }).catch(() => {});
                             } else {
@@ -2272,18 +2709,18 @@ function initBotListeners(client, gateway) {
                             }
                         } else {
                             const embed = {
-                                color: EMBED_COLOR,
-                                author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
-                                title: `${Emojis.STREAM} Streaming Badge Spoofed`,
+                                color: COLOR_SUCCESS,
+                                author: { name: "QUEST CONTROL / BADGE SPOOFER" },
+                                title: "Streaming Badge Spoofed",
                                 description: [
                                     `<@${userId}> Successfully registered **${spoofRes.totalHoursSpoofed} stream hours** for **${matchedGame.name}**!`,
-                                    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                    `**${Emojis.STREAM} Mode:** Live Screenshare & Stream Telemetry`,
-                                    `**${Emojis.GAME} Stream Title:** ${matchedGame.name}`,
-                                    `**${Emojis.TIME} Stream Duration:** ${spoofRes.totalHoursSpoofed} hours`,
-                                    `**${Emojis.CALENDAR} Profile Sync:** Discord profile badges update in batches within 24-48 hours.`,
+                                    "",
+                                    `• **Mode:** Live Screenshare & Stream Telemetry`,
+                                    `• **Stream Title:** ${matchedGame.name}`,
+                                    `• **Duration Tracked:** ${spoofRes.totalHoursSpoofed} hours`,
+                                    `• **Profile Sync:** Discord profile badges update in batches within 24 to 48 hours.`,
                                 ].join("\n"),
-                                footer: { text: "QUEST CONTROL  •  Discord Science Telemetry Pipeline" },
+                                footer: { text: "Quest Control • Discord Science Telemetry" },
                                 timestamp: new Date().toISOString(),
                             };
                             if (progressMsg?.id) {
@@ -2298,14 +2735,14 @@ function initBotListeners(client, gateway) {
                     return;
                 }
 
-                // ── !badge variety [count] ────────────────────────────────────
+                // !badge variety [count]
                 if (subCmd === "variety") {
                     const countRaw = subArgs[1];
                     const countNum = parseInt(countRaw || "25", 10);
                     const count = isNaN(countNum) ? 25 : Math.max(5, Math.min(countNum, 50));
 
                     const progressMsg = await api.channels.createMessage(channelId, {
-                        content: `${Emojis.CLOCK} <@${userId}> Telemetry in progress: Spoofing Game Variety badge with **${count} games**...`,
+                        content: `<@${userId}> Telemetry in progress: Spoofing Game Variety badge with **${count} games**...`,
                     }).catch(() => null);
 
                     startRun(userId);
@@ -2317,7 +2754,7 @@ function initBotListeners(client, gateway) {
                         });
 
                         if (!spoofRes.success) {
-                            const errorContent = `${Emojis.ERROR} <@${userId}> Variety badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`;
+                            const errorContent = `<@${userId}> Variety badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`;
                             if (progressMsg?.id) {
                                 await api.channels.editMessage(channelId, progressMsg.id, { content: errorContent }).catch(() => {});
                             } else {
@@ -2325,17 +2762,17 @@ function initBotListeners(client, gateway) {
                             }
                         } else {
                             const embed = {
-                                color: EMBED_COLOR,
-                                author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
-                                title: `${Emojis.ACTIVITY} Game Variety Badge Spoofed`,
+                                color: COLOR_SUCCESS,
+                                author: { name: "QUEST CONTROL / BADGE SPOOFER" },
+                                title: "Game Variety Badge Spoofed",
                                 description: [
                                     `<@${userId}> Successfully simulated **${spoofRes.gamesSpoofed} distinct detectable games**!`,
-                                    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                    `**${Emojis.ACTIVITY} Badge Mode:** Game Variety`,
-                                    `**${Emojis.GAME} Games Registered:** ${spoofRes.gamesSpoofed} games`,
-                                    `**${Emojis.CALENDAR} Profile Sync:** Discord profile badges update in batches within 24-48 hours.`,
+                                    "",
+                                    `• **Badge Mode:** Game Variety`,
+                                    `• **Games Registered:** ${spoofRes.gamesSpoofed} games`,
+                                    `• **Profile Sync:** Discord profile badges update in batches within 24 to 48 hours.`,
                                 ].join("\n"),
-                                footer: { text: "QUEST CONTROL  •  Discord Science Telemetry Pipeline" },
+                                footer: { text: "Quest Control • Discord Science Telemetry" },
                                 timestamp: new Date().toISOString(),
                             };
                             if (progressMsg?.id) {
@@ -2350,14 +2787,14 @@ function initBotListeners(client, gateway) {
                     return;
                 }
 
-                // ── !badge all [hours] ────────────────────────────────────────
+                // !badge all [hours]
                 if (subCmd === "all") {
                     const hoursRaw = subArgs[1];
                     const hoursNum = parseInt(hoursRaw || "100", 10);
                     const hours = isNaN(hoursNum) ? 100 : Math.max(1, Math.min(hoursNum, 500));
 
                     const progressMsg = await api.channels.createMessage(channelId, {
-                        content: `${Emojis.CLOCK} <@${userId}> Telemetry in progress: Spoofing **All Badges** (Playtime & Streaming) with **${hours} hours** on top games...`,
+                        content: `<@${userId}> Telemetry in progress: Spoofing Playtime and Streaming with **${hours} hours**...`,
                     }).catch(() => null);
 
                     startRun(userId);
@@ -2368,7 +2805,7 @@ function initBotListeners(client, gateway) {
                         });
 
                         if (!spoofRes.success) {
-                            const errorContent = `${Emojis.ERROR} <@${userId}> Combined badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`;
+                            const errorContent = `<@${userId}> Combined badge spoofing failed: ${spoofRes.error || "Could not authenticate with Discord"}`;
                             if (progressMsg?.id) {
                                 await api.channels.editMessage(channelId, progressMsg.id, { content: errorContent }).catch(() => {});
                             } else {
@@ -2376,17 +2813,17 @@ function initBotListeners(client, gateway) {
                             }
                         } else {
                             const embed = {
-                                color: EMBED_COLOR,
-                                author: { name: "QUEST CONTROL  /  BADGE SPOOFER" },
-                                title: `${Emojis.FIRE} All Profile Badges Spoofed`,
+                                color: COLOR_SUCCESS,
+                                author: { name: "QUEST CONTROL / BADGE SPOOFER" },
+                                title: "Profile Badges Spoofed",
                                 description: [
                                     `<@${userId}> Successfully simulated **Playtime & Streaming** across **${spoofRes.gamesSpoofed} games**!`,
-                                    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                                    `**${Emojis.FIRE} Mode:** Combined Game Playtime & Live Streaming`,
-                                    `**${Emojis.TIME} Hours Logged:** ~${spoofRes.totalHoursSpoofed} hours`,
-                                    `**${Emojis.CALENDAR} Profile Sync:** Discord profile badges update in batches within 24-48 hours.`,
+                                    "",
+                                    `• **Mode:** Combined Game Playtime & Live Streaming`,
+                                    `• **Hours Logged:** ~${spoofRes.totalHoursSpoofed} hours`,
+                                    `• **Profile Sync:** Discord profile badges update in batches within 24 to 48 hours.`,
                                 ].join("\n"),
-                                footer: { text: "QUEST CONTROL  •  Discord Science Telemetry Pipeline" },
+                                footer: { text: "Quest Control • Discord Science Telemetry" },
                                 timestamp: new Date().toISOString(),
                             };
                             if (progressMsg?.id) {
@@ -2402,17 +2839,16 @@ function initBotListeners(client, gateway) {
                 }
 
                 await api.channels.createMessage(channelId, {
-                    content: `Invalid badge command. Use \`!badge help\`, \`!badge playtime [hours]\`, \`!badge stream [hours]\`, or \`!badge variety [count]\`.`,
+                    content: "Invalid badge command. Use `!badge help`, `!badge playtime [hours]`, `!badge stream [hours]`, or `!badge variety [count]`.",
                     message_reference: { message_id: message.id },
                 }).catch(() => {});
                 return;
             }
 
-            // ── 10. QUEST COMMANDS: !quest [run|status|panel] ─────────────────
+            // ── 11. QUEST COMMANDS: !quest [run|status|panel] ─────────────────
             if (command === "quest") {
                 const subCmd = subArgs[0]?.toLowerCase();
 
-                // If user pastes a token into quest command, delete and require linking
                 const possibleToken = subArgs.find((a) => a && (a.length >= 25 || a.includes(".")));
                 if (possibleToken) {
                     await safeDeleteMessage(api, channelId, message.id);
@@ -2429,7 +2865,6 @@ function initBotListeners(client, gateway) {
                         }).catch(() => {});
                         return;
                     }
-                    console.log(`[Prefix status] started (user: ${userId})`);
                     await sendStatusEmbeds(channelId, token, userId);
                     return;
                 }
@@ -2455,7 +2890,7 @@ function initBotListeners(client, gateway) {
                     }
 
                     const sentMsg = await api.channels.createMessage(channelId, {
-                        content: `${Emojis.CLOCK} <@${userId}> Quest processing has started...`,
+                        content: `<@${userId}> Quest processing has started...`,
                     }).catch(() => null);
 
                     const editFinal = async (txt) => {
@@ -2466,7 +2901,6 @@ function initBotListeners(client, gateway) {
                         }
                     };
 
-                    console.log(`[Prefix run] started (user: ${userId})`);
                     startRun(userId);
                     try {
                         await runAndReport(token, channelId, async () => {}, editFinal);
@@ -2512,7 +2946,7 @@ function startDiscordBot() {
         }
         return isBotConnected;
     } else {
-        console.log("[Discord Bot] Standby: Valid BOT_TOKEN or CLIENT_ID not set in env. Bot Gateway is idle.");
+        console.log("[Discord Bot] Standby: Valid botToken or clientId not set in config.json. Bot Gateway is idle.");
         return false;
     }
 }
@@ -2520,11 +2954,10 @@ function startDiscordBot() {
 if (hasValidBotConfig && client && gateway) {
     initBotListeners(client, gateway);
 } else {
-    console.log("[Discord Bot] Standby: Real BOT_TOKEN or CLIENT_ID not provided. Dev server is running on port 3000.");
+    console.log("[Discord Bot] Standby: Valid botToken or clientId not configured in config.json. Server active on port " + HTTP_PORT);
 }
 
 // ── Lightweight HTTP Health Server for Dev Environment (Port 3000) ────────────
-const HTTP_PORT = parseInt(process.env.PORT || "3000", 10);
 const healthServer = http.createServer((req, res) => {
     res.writeHead(200, {
         "Content-Type": "application/json",

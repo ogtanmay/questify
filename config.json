@@ -1,0 +1,10 @@
+{
+  "botToken": "",
+  "clientId": "",
+  "ownerIds": [],
+  "guildId": "",
+  "yesCaptchaApiKey": "",
+  "port": 3000,
+  "prefix": "!quest",
+  "defaultPresenceGame": "valorant"
+}
