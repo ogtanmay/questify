@@ -51,12 +51,13 @@ Configure your bot credentials directly in `config.json`:
 - `!unlink` or `/unlink` — Remove your linked account from the bot database
 - `!whoami` or `/whoami` — Check your linked account details
 
-### Rich Presence
-- `/presence game preset:valorant` — Set active playing status for VALORANT
-- `/presence game preset:vscode` — Set active playing status for VS Code
-- `/presence clear` — Turn off custom rich presence
-- `!presence` — Open interactive presence control panel with dropdown & buttons
-- `!presence valorant` / `!presence vscode` / `!presence stream` / `!presence clear`
+### Rich Presence (Dedicated Games Catalog)
+- `!presence games` or `/presence list` — View the dedicated Presence-Only games list
+- `!presence <game>` — Set game status (e.g. `!presence valorant`, `!presence cs2`, `!presence fortnite`)
+- `!presence <game> [details] [state]` — Set custom game presence details and state
+- `/presence game preset:<game>` — Set active playing status via slash command
+- `!presence clear` or `/presence clear` — Turn off custom rich presence
+- `!presence` — Open interactive presence control panel with dropdown & quick buttons
 
 ### Discord Quests
 - `/run-quests` or `!quest run` — Auto-complete all active Discord quests

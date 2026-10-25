@@ -52,6 +52,9 @@ const {
     clearUserPresence,
     getUserPresence,
     GAME_PRESETS,
+    PRESENCE_GAMES,
+    findPresenceGame,
+    getPresenceGamesList,
 } = require("./src/presenceManager");
 
 // ── Configuration (Loaded from config.json with env fallback) ─────────────────
@@ -120,6 +123,7 @@ const BTN_PRESENCE_MENU = "presence_menu_open";
 const BTN_PRESENCE_VALORANT = "presence_set_valorant";
 const BTN_PRESENCE_VSCODE = "presence_set_vscode";
 const BTN_PRESENCE_CLEAR = "presence_clear_btn";
+const BTN_PRESENCE_GAMES = "presence_games_list";
 const SELECT_HELP_CATEGORY = "help_category_select";
 const SELECT_PRESENCE_GAME = "presence_game_select";
 const MODAL_LINK = "modal_link_token";
@@ -366,6 +370,73 @@ function buildLinkEmbed(userRecord) {
 }
 
 /**
+ * Dedicated Presence Games Catalog Embed (Only for rich presence, separate from badge spoofer)
+ */
+function buildPresenceGamesEmbed() {
+    const games = getPresenceGamesList().filter((g) => g.key !== "custom");
+    const lines = games.map((g, idx) => {
+        const typeLabel = g.type === 1 ? "Streaming" : "Playing";
+        const idInfo = g.applicationId ? `ID: \`${g.applicationId}\`` : "Twitch URL";
+        return `• **${idx + 1}. ${g.label || g.name}** (\`${g.key}\`)\n  *${g.details || typeLabel}* — ${g.state || "Active"} • ${idInfo}`;
+    });
+
+    return {
+        embeds: [
+            {
+                color: COLOR_PRIMARY,
+                author: { name: "QUEST CONTROL / RICH PRESENCE CATALOG" },
+                title: "Presence-Only Games Catalog",
+                description: [
+                    "Dedicated list of games available for Discord Rich Presence on your linked account.",
+                    "This list is separate from badge spoofer games.",
+                    "",
+                    "## How to Set Presence",
+                    "• Use `!presence <key>` (e.g. `!presence valorant`, `!presence cs2`, `!presence fortnite`)",
+                    "• Pass custom details: `!presence valorant Match Point (12-11)`",
+                    "• Or use the interactive dropdown in `!presence`",
+                    "",
+                    "## Supported Presence Games",
+                    lines.join("\n"),
+                ].join("\n"),
+                footer: { text: "Quest Control • Rich Presence Only" },
+                timestamp: new Date().toISOString(),
+            },
+        ],
+        components: [
+            {
+                type: ComponentType.ActionRow,
+                components: [
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Primary,
+                        custom_id: BTN_PRESENCE_MENU,
+                        label: "Open Dashboard",
+                    },
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Secondary,
+                        custom_id: BTN_PRESENCE_VALORANT,
+                        label: "VALORANT",
+                    },
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Secondary,
+                        custom_id: BTN_PRESENCE_VSCODE,
+                        label: "VS Code",
+                    },
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Danger,
+                        custom_id: BTN_PRESENCE_CLEAR,
+                        label: "Turn Off Presence",
+                    },
+                ],
+            },
+        ],
+    };
+}
+
+/**
  * Rich Presence Management Embed
  */
 function buildPresenceEmbed(userId, activePresence = null) {
@@ -379,13 +450,30 @@ function buildPresenceEmbed(userId, activePresence = null) {
             : "**Active Status:** No custom presence currently active.",
         "",
         "## Select a Game Preset Below",
-        "• **VALORANT:** Competitive match presence (`700136079562375258`)",
-        "• **Visual Studio Code:** Workspace and file editing status (`383226320970055681`)",
-        "• **Minecraft:** Survival multiplayer world (`432980957394370572`)",
-        "• **League of Legends:** Ranked match (`356869127241072640`)",
-        "• **Streaming:** Live Twitch/YouTube broadcast status",
-        "",
-        "*Use the dropdown or quick action buttons below to apply presence instantly.*",
+        "• Choose a game from the dropdown menu to activate presence instantly.",
+        "• View all presence titles with `!presence games` or click **All Games List** below.",
+        "• Custom details: `!presence <game> [details] [state]`",
+    ];
+
+    const selectOptions = [
+        { label: "VALORANT", value: "valorant", description: "Competitive match - In Game" },
+        { label: "Visual Studio Code", value: "vscode", description: "Editing workspace files" },
+        { label: "Counter-Strike 2", value: "cs2", description: "Premier Matchmaking - Dust II" },
+        { label: "Fortnite", value: "fortnite", description: "Battle Royale (Duo)" },
+        { label: "Minecraft", value: "minecraft", description: "Survival Multiplayer Realm" },
+        { label: "Grand Theft Auto V", value: "gta5", description: "GTA Online Freemode Session" },
+        { label: "Roblox", value: "roblox", description: "Playing Blox Fruits" },
+        { label: "League of Legends", value: "league", description: "Summoner's Rift (Ranked)" },
+        { label: "Apex Legends", value: "apex", description: "Ranked Leagues - Drop Ship" },
+        { label: "Overwatch 2", value: "overwatch2", description: "Competitive Role Queue" },
+        { label: "Genshin Impact", value: "genshin", description: "Exploring Teyvat" },
+        { label: "Call of Duty: Warzone", value: "warzone", description: "Battle Royale Quads" },
+        { label: "Cyberpunk 2077", value: "cyberpunk", description: "Exploring Night City" },
+        { label: "Rust", value: "rust", description: "Official Server Survival" },
+        { label: "Rocket League", value: "rocketleague", description: "Competitive 2v2" },
+        { label: "Rainbow Six Siege", value: "r6s", description: "Ranked Match (Defending)" },
+        { label: "Twitch Stream", value: "stream", description: "Live broadcast status" },
+        { label: "Clear Presence", value: "clear", description: "Turn off and restore regular presence" },
     ];
 
     return {
@@ -406,39 +494,8 @@ function buildPresenceEmbed(userId, activePresence = null) {
                     {
                         type: ComponentType.StringSelect,
                         custom_id: SELECT_PRESENCE_GAME,
-                        placeholder: "Choose a game or status preset...",
-                        options: [
-                            {
-                                label: "VALORANT",
-                                value: "valorant",
-                                description: "Competitive match - In Game",
-                            },
-                            {
-                                label: "Visual Studio Code",
-                                value: "vscode",
-                                description: "Editing workspace files",
-                            },
-                            {
-                                label: "Minecraft",
-                                value: "minecraft",
-                                description: "Survival Multiplayer Realm",
-                            },
-                            {
-                                label: "League of Legends",
-                                value: "league",
-                                description: "Summoner's Rift (Ranked)",
-                            },
-                            {
-                                label: "Twitch Stream",
-                                value: "stream",
-                                description: "Live broadcast status",
-                            },
-                            {
-                                label: "Clear Presence",
-                                value: "clear",
-                                description: "Turn off and restore regular presence",
-                            },
-                        ],
+                        placeholder: "Choose a game from the presence catalog...",
+                        options: selectOptions,
                     },
                 ],
             },
@@ -456,6 +513,12 @@ function buildPresenceEmbed(userId, activePresence = null) {
                         style: ButtonStyle.Primary,
                         custom_id: BTN_PRESENCE_VSCODE,
                         label: "VS Code",
+                    },
+                    {
+                        type: ComponentType.Button,
+                        style: ButtonStyle.Secondary,
+                        custom_id: BTN_PRESENCE_GAMES,
+                        label: "All Games List",
                     },
                     {
                         type: ComponentType.Button,
@@ -528,13 +591,15 @@ function buildHelpEmbed(category = "help_overview") {
                 "## Game Rich Presence Spoofing",
                 "Display rich presence for verified detectable games directly on your user account.",
                 "",
-                "• `/presence game preset:valorant` — set VALORANT playing status",
-                "• `/presence game preset:vscode` — set Visual Studio Code status",
-                "• `/presence stream` — set Twitch streaming status",
-                "• `/presence status` — inspect current active presence session",
-                "• `/presence clear` — turn off rich presence",
-                "• `!presence` — open the interactive presence control panel",
-                "• `!presence valorant` / `!presence vscode` / `!presence clear`",
+                "• `!presence games` or `/presence list` — view the dedicated Presence Games list",
+                "• `!presence <game>` — activate presence (e.g. `!presence valorant`, `!presence cs2`, `!presence fortnite`)",
+                "• `!presence <game> <details> <state>` — pass custom details and state",
+                "• `!presence clear` — turn off rich presence",
+                "• `!presence` — open the interactive presence control panel with dropdown",
+                "• `/presence game preset:<game>` — slash command to set presence",
+                "• `/presence status` / `/presence clear` — manage via slash commands",
+                "",
+                "*Note: Presence games are exclusively for profile status, separate from badge spoofer.*",
             ];
             break;
 
@@ -1134,8 +1199,20 @@ async function registerCommands(targetGuildId, customBotToken, customClientId) {
                             choices: [
                                 { name: "VALORANT", value: "valorant" },
                                 { name: "Visual Studio Code", value: "vscode" },
+                                { name: "Counter-Strike 2", value: "cs2" },
+                                { name: "Fortnite", value: "fortnite" },
                                 { name: "Minecraft", value: "minecraft" },
+                                { name: "Grand Theft Auto V", value: "gta5" },
+                                { name: "Roblox", value: "roblox" },
                                 { name: "League of Legends", value: "league" },
+                                { name: "Apex Legends", value: "apex" },
+                                { name: "Overwatch 2", value: "overwatch2" },
+                                { name: "Genshin Impact", value: "genshin" },
+                                { name: "Warzone", value: "warzone" },
+                                { name: "Cyberpunk 2077", value: "cyberpunk" },
+                                { name: "Rust", value: "rust" },
+                                { name: "Rocket League", value: "rocketleague" },
+                                { name: "Rainbow Six Siege", value: "r6s" },
                                 { name: "Twitch Stream", value: "stream" },
                             ],
                         },
@@ -1152,6 +1229,11 @@ async function registerCommands(targetGuildId, customBotToken, customClientId) {
                             required: false,
                         },
                     ],
+                },
+                {
+                    name: "list",
+                    description: "View the dedicated list of games available for Rich Presence",
+                    type: ApplicationCommandOptionType.Subcommand,
                 },
                 {
                     name: "status",
@@ -1516,6 +1598,14 @@ function initBotListeners(client, gateway) {
                     return;
                 }
 
+                if (customId === BTN_PRESENCE_GAMES) {
+                    await api.interactions.reply(interaction.id, interaction.token, {
+                        ...buildPresenceGamesEmbed(),
+                        flags: 64,
+                    });
+                    return;
+                }
+
                 if (customId === BTN_PRESENCE_CLEAR) {
                     clearUserPresence(userId);
                     await api.interactions.reply(interaction.id, interaction.token, {
@@ -1835,6 +1925,14 @@ function initBotListeners(client, gateway) {
                     const current = getUserPresence(userId);
                     await api.interactions.reply(interaction.id, interaction.token, {
                         ...buildPresenceEmbed(userId, current),
+                        flags: 64,
+                    });
+                    return;
+                }
+
+                if (sub.name === "list" || sub.name === "games") {
+                    await api.interactions.reply(interaction.id, interaction.token, {
+                        ...buildPresenceGamesEmbed(),
                         flags: 64,
                     });
                     return;
@@ -2183,13 +2281,23 @@ function initBotListeners(client, gateway) {
                     return;
                 }
 
-                if (["valorant", "vscode", "minecraft", "league", "stream"].includes(subCmd)) {
+                if (subCmd === "games" || subCmd === "list") {
+                    await api.channels.createMessage(channelId, {
+                        ...buildPresenceGamesEmbed(),
+                        message_reference: { message_id: message.id },
+                    }).catch(() => {});
+                    return;
+                }
+
+                // Check if subCmd matches any presence game (key, name, or ID)
+                const matchedGame = findPresenceGame(subCmd);
+                if (matchedGame && (GAME_PRESETS[subCmd] || PRESENCE_GAMES.some((g) => g.key === subCmd || g.name.toLowerCase() === subCmd))) {
                     const customDetails = subArgs.slice(1).join(" ") || undefined;
                     try {
-                        await setUserPresence(userId, token, subCmd, { details: customDetails });
+                        await setUserPresence(userId, token, matchedGame.key, { details: customDetails });
                         const current = getUserPresence(userId);
                         await api.channels.createMessage(channelId, {
-                            content: `<@${userId}> Rich presence activated for **${GAME_PRESETS[subCmd]?.label || subCmd}**!`,
+                            content: `<@${userId}> Rich presence activated for **${matchedGame.label || matchedGame.name}**!`,
                             ...buildPresenceEmbed(userId, current),
                             message_reference: { message_id: message.id },
                         }).catch(() => {});
@@ -2203,7 +2311,7 @@ function initBotListeners(client, gateway) {
                 }
 
                 await api.channels.createMessage(channelId, {
-                    content: "Usage: `!presence valorant`, `!presence vscode`, `!presence stream`, `!presence clear`, or `!presence` to open control panel.",
+                    content: "Unknown presence game. Use `!presence games` to view the dedicated Presence Games catalog, or `!presence` to open the control panel.",
                     message_reference: { message_id: message.id },
                 }).catch(() => {});
                 return;

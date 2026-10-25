@@ -1,30 +1,36 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
+    PRESENCE_GAMES,
     GAME_PRESETS,
+    findPresenceGame,
     buildActivity,
     clearUserPresence,
     getUserPresence,
     listActivePresences,
+    getPresenceGamesList,
 } = require("./presenceManager");
 
-test("presenceManager defines popular detectable games presets", () => {
-    assert.ok(GAME_PRESETS.valorant, "VALORANT preset exists");
-    assert.strictEqual(GAME_PRESETS.valorant.applicationId, "700136079562375258");
-    assert.strictEqual(GAME_PRESETS.valorant.name, "VALORANT");
+test("presenceManager defines dedicated presence-only games list", () => {
+    assert.ok(Array.isArray(PRESENCE_GAMES), "PRESENCE_GAMES is an array");
+    assert.ok(PRESENCE_GAMES.length >= 10, "Has rich catalog of presence games");
 
-    assert.ok(GAME_PRESETS.vscode, "VS Code preset exists");
-    assert.strictEqual(GAME_PRESETS.vscode.applicationId, "383226320970055681");
-    assert.strictEqual(GAME_PRESETS.vscode.name, "Visual Studio Code");
+    const gamesList = getPresenceGamesList();
+    assert.strictEqual(gamesList.length, PRESENCE_GAMES.length);
 
-    assert.ok(GAME_PRESETS.minecraft, "Minecraft preset exists");
-    assert.strictEqual(GAME_PRESETS.minecraft.applicationId, "432980957394370572");
+    const valorant = findPresenceGame("valorant");
+    assert.strictEqual(valorant.name, "VALORANT");
+    assert.strictEqual(valorant.applicationId, "700136079562375258");
 
-    assert.ok(GAME_PRESETS.league, "League of Legends preset exists");
-    assert.strictEqual(GAME_PRESETS.league.applicationId, "356869127241072640");
+    const cs2 = findPresenceGame("cs2");
+    assert.strictEqual(cs2.name, "Counter-Strike 2");
+    assert.strictEqual(cs2.applicationId, "733852150177726474");
 
-    assert.ok(GAME_PRESETS.stream, "Streaming preset exists");
-    assert.strictEqual(GAME_PRESETS.stream.type, 1);
+    const fortnite = findPresenceGame("fortnite");
+    assert.strictEqual(fortnite.name, "Fortnite");
+
+    const vscode = findPresenceGame("383226320970055681");
+    assert.strictEqual(vscode.name, "Visual Studio Code");
 });
 
 test("buildActivity builds valid Discord activity payloads", () => {

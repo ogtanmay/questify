@@ -1,23 +1,19 @@
 /**
  * Discord User Custom Rich Presence Manager
  * Allows linked users to spoof rich presence activities on their Discord account:
- * - VALORANT (700136079562375258)
- * - Visual Studio Code (383226320970055681)
- * - Minecraft (432980957394370572)
- * - League of Legends (356869127241072640)
- * - Streaming Status (Type 1 Twitch/YouTube)
- * - Custom Status (Type 4)
+ * Dedicated Presence Games List (independent of badge spoofer)
  */
 
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=9&encoding=json";
 
-const GAME_PRESETS = {
-    valorant: {
+// ── Dedicated Presence-Only Games Catalog ────────────────────────────────────
+const PRESENCE_GAMES = [
+    {
         key: "valorant",
         label: "VALORANT",
         applicationId: "700136079562375258",
         name: "VALORANT",
-        type: 0, // Playing
+        type: 0,
         details: "Competitive",
         state: "In Game (11 - 9)",
         assets: {
@@ -25,12 +21,12 @@ const GAME_PRESETS = {
             large_text: "VALORANT",
         },
     },
-    vscode: {
+    {
         key: "vscode",
         label: "Visual Studio Code",
         applicationId: "383226320970055681",
         name: "Visual Studio Code",
-        type: 0, // Playing
+        type: 0,
         details: "Workspace: discord-quest-bot",
         state: "Editing bot.js",
         assets: {
@@ -38,12 +34,12 @@ const GAME_PRESETS = {
             large_text: "Visual Studio Code",
         },
     },
-    minecraft: {
+    {
         key: "minecraft",
         label: "Minecraft",
         applicationId: "432980957394370572",
         name: "Minecraft",
-        type: 0, // Playing
+        type: 0,
         details: "Multiplayer Survival",
         state: "Exploring Overworld",
         assets: {
@@ -51,12 +47,12 @@ const GAME_PRESETS = {
             large_text: "Minecraft",
         },
     },
-    league: {
+    {
         key: "league",
         label: "League of Legends",
         applicationId: "356869127241072640",
         name: "League of Legends",
-        type: 0, // Playing
+        type: 0,
         details: "Summoner's Rift (Ranked)",
         state: "In Match",
         assets: {
@@ -64,34 +60,218 @@ const GAME_PRESETS = {
             large_text: "League of Legends",
         },
     },
-    stream: {
+    {
+        key: "cs2",
+        label: "Counter-Strike 2",
+        applicationId: "733852150177726474",
+        name: "Counter-Strike 2",
+        type: 0,
+        details: "Premier Matchmaking",
+        state: "Dust II (12 - 10)",
+        assets: {
+            large_image: "cs2_logo",
+            large_text: "Counter-Strike 2",
+        },
+    },
+    {
+        key: "fortnite",
+        label: "Fortnite",
+        applicationId: "432980957394370560",
+        name: "Fortnite",
+        type: 0,
+        details: "Battle Royale (Duo)",
+        state: "In Match (Top 10)",
+        assets: {
+            large_image: "fortnite",
+            large_text: "Fortnite",
+        },
+    },
+    {
+        key: "gta5",
+        label: "Grand Theft Auto V",
+        applicationId: "367827983903424512",
+        name: "Grand Theft Auto V",
+        type: 0,
+        details: "GTA Online",
+        state: "Freemode Session",
+        assets: {
+            large_image: "gtav",
+            large_text: "Grand Theft Auto V",
+        },
+    },
+    {
+        key: "roblox",
+        label: "Roblox",
+        applicationId: "433010738367922186",
+        name: "Roblox",
+        type: 0,
+        details: "Playing Experience",
+        state: "Blox Fruits",
+        assets: {
+            large_image: "roblox",
+            large_text: "Roblox",
+        },
+    },
+    {
+        key: "apex",
+        label: "Apex Legends",
+        applicationId: "532296478954717194",
+        name: "Apex Legends",
+        type: 0,
+        details: "Ranked Leagues",
+        state: "In Drop Ship",
+        assets: {
+            large_image: "apex",
+            large_text: "Apex Legends",
+        },
+    },
+    {
+        key: "overwatch2",
+        label: "Overwatch 2",
+        applicationId: "356875221078245376",
+        name: "Overwatch 2",
+        type: 0,
+        details: "Competitive Role Queue",
+        state: "King's Row (Payload)",
+        assets: {
+            large_image: "overwatch",
+            large_text: "Overwatch 2",
+        },
+    },
+    {
+        key: "genshin",
+        label: "Genshin Impact",
+        applicationId: "769665713149935636",
+        name: "Genshin Impact",
+        type: 0,
+        details: "Exploring Teyvat",
+        state: "Domain Challenge",
+        assets: {
+            large_image: "genshin",
+            large_text: "Genshin Impact",
+        },
+    },
+    {
+        key: "warzone",
+        label: "Call of Duty: Warzone",
+        applicationId: "626198755670589440",
+        name: "Call of Duty: Warzone",
+        type: 0,
+        details: "Battle Royale Quads",
+        state: "Urzykstan In Match",
+        assets: {
+            large_image: "warzone",
+            large_text: "Call of Duty: Warzone",
+        },
+    },
+    {
+        key: "cyberpunk",
+        label: "Cyberpunk 2077",
+        applicationId: "752943263442141235",
+        name: "Cyberpunk 2077",
+        type: 0,
+        details: "Exploring Night City",
+        state: "Story Mission",
+        assets: {
+            large_image: "cyberpunk",
+            large_text: "Cyberpunk 2077",
+        },
+    },
+    {
+        key: "rust",
+        label: "Rust",
+        applicationId: "432980957394370561",
+        name: "Rust",
+        type: 0,
+        details: "Official Server",
+        state: "Roaming with Clan",
+        assets: {
+            large_image: "rust",
+            large_text: "Rust",
+        },
+    },
+    {
+        key: "rocketleague",
+        label: "Rocket League",
+        applicationId: "379286095596486656",
+        name: "Rocket League",
+        type: 0,
+        details: "Competitive 2v2",
+        state: "Overtime (2 - 2)",
+        assets: {
+            large_image: "rocketleague",
+            large_text: "Rocket League",
+        },
+    },
+    {
+        key: "r6s",
+        label: "Rainbow Six Siege",
+        applicationId: "356875544496832513",
+        name: "Tom Clancy's Rainbow Six Siege",
+        type: 0,
+        details: "Ranked Match",
+        state: "Defending (Round 5)",
+        assets: {
+            large_image: "r6s",
+            large_text: "Tom Clancy's Rainbow Six Siege",
+        },
+    },
+    {
         key: "stream",
         label: "Streaming (Twitch)",
         applicationId: null,
         name: "Twitch",
-        type: 1, // Streaming
+        type: 1,
         url: "https://twitch.tv/discord",
         details: "Live Stream",
         state: "Streaming with Quest Bot",
     },
-    custom: {
+    {
         key: "custom",
         label: "Custom Status",
         applicationId: null,
         name: "Custom Status",
-        type: 4, // Custom Status
+        type: 4,
         state: "Active on Discord",
     },
-};
+];
+
+// Build index lookup table by key, lowercase name, and applicationId
+const GAME_PRESETS = {};
+for (const game of PRESENCE_GAMES) {
+    GAME_PRESETS[game.key] = game;
+    if (game.applicationId) {
+        GAME_PRESETS[game.applicationId] = game;
+    }
+    GAME_PRESETS[game.name.toLowerCase()] = game;
+}
 
 // Map of active presence sessions by userId: { ws, intervalId, presetKey, activity, startedAt, token }
 const activePresences = new Map();
 
 /**
+ * Finds a presence game preset by key, name, or application ID
+ */
+function findPresenceGame(query) {
+    if (!query) return GAME_PRESETS.valorant;
+    const clean = String(query).trim().toLowerCase();
+    if (GAME_PRESETS[clean]) return GAME_PRESETS[clean];
+
+    // Substring search on name or key
+    const matched = PRESENCE_GAMES.find(
+        (g) =>
+            g.key.toLowerCase().includes(clean) ||
+            g.name.toLowerCase().includes(clean) ||
+            (g.applicationId && g.applicationId === clean)
+    );
+    return matched || GAME_PRESETS.valorant;
+}
+
+/**
  * Builds activity object for Discord gateway
  */
 function buildActivity(presetKey, customOptions = {}) {
-    const preset = GAME_PRESETS[presetKey] || GAME_PRESETS.valorant;
+    const preset = findPresenceGame(presetKey);
     const now = Date.now();
 
     const activity = {
@@ -140,7 +320,7 @@ function setUserPresence(userId, token, presetKey = "valorant", customOptions = 
     // Stop existing presence session if already active
     clearUserPresence(userId);
 
-    const preset = GAME_PRESETS[presetKey] || GAME_PRESETS.valorant;
+    const preset = findPresenceGame(presetKey);
     const activity = buildActivity(presetKey, customOptions);
 
     return new Promise((resolve, reject) => {
@@ -160,7 +340,7 @@ function setUserPresence(userId, token, presetKey = "valorant", customOptions = 
             token,
             ws,
             presetKey: preset.key,
-            presetName: preset.label,
+            presetName: preset.label || preset.name,
             activity,
             startedAt: Date.now(),
             status: "connecting",
@@ -232,7 +412,7 @@ function setUserPresence(userId, token, presetKey = "valorant", customOptions = 
                     resolve({
                         success: true,
                         preset: preset.key,
-                        presetName: preset.label,
+                        presetName: preset.label || preset.name,
                         activity,
                     });
                 }
@@ -288,7 +468,6 @@ function clearUserPresence(userId) {
 
     try {
         if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-            // Send empty presence before disconnecting
             session.ws.send(
                 JSON.stringify({
                     op: 3,
@@ -302,7 +481,7 @@ function clearUserPresence(userId) {
             );
             session.ws.close(1000, "Presence cleared by user");
         }
-    } catch (e) {
+    } catch {
         // Ignore socket close errors
     }
 
@@ -344,11 +523,21 @@ function listActivePresences() {
     return list;
 }
 
+/**
+ * Returns the curated presence-only games list
+ */
+function getPresenceGamesList() {
+    return PRESENCE_GAMES;
+}
+
 module.exports = {
+    PRESENCE_GAMES,
     GAME_PRESETS,
+    findPresenceGame,
     buildActivity,
     setUserPresence,
     clearUserPresence,
     getUserPresence,
     listActivePresences,
+    getPresenceGamesList,
 };
